@@ -458,7 +458,7 @@ async function scbaEnginePreview(env, url) {
   return {
     success: true,
     mode: 'READ_ONLY_ASSET_LIFECYCLE_ENGINE_PREVIEW_V8',
-    module: 'FIRE_HOSE',
+    module: 'SCBA_CYLINDER',
     assetClassId: context.assetClassId,
     assetClassName: context.assetClassName,
     sourceInventoryCount: context.items.length,
@@ -572,7 +572,7 @@ async function buildDashboardPayload(env, url) {
     mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V8',
     generatedAt: new Date().toISOString(),
     refreshMinutes: 15,
-    module: 'FIRE_HOSE',
+    module: 'SCBA_CYLINDER',
     assetClassId: context.assetClassId,
     assetClassName: context.assetClassName,
     summary: {
@@ -591,7 +591,7 @@ async function buildDashboardPayload(env, url) {
       missingManufacturer: activeAssets.filter(row => !row.manufacturer).length,
       missingInServiceDate: activeAssets.filter(row => !row.inServiceDate).length,
       missingNextMaintenanceDate: activeAssets.filter(row => !row.nextMaintenanceDate).length,
-      missingCylinder Type: activeAssets.filter(row => !row.cylinderType).length
+      missingCylinderType: activeAssets.filter(row => !row.cylinderType).length
     },
     limitations: [
       'Detailed pass/fail, pressure, leak, coupling, and station answers are not yet resolved from formAnswerUniqueId.',
@@ -699,7 +699,7 @@ function normalizeLiveItem(source, assetClassName, manufacturerById, statusById)
     nextMaintenanceDate: dateText(source, ['preventativeMaintenanceNextPmdate']),
     decommissionDate: dateText(source, ['decommissionOrOutOfServiceDate']),
     estimatedReplacementCost: numeric(first(source, ['partPrice', 'unitOrderPrice', 'unitPrice'])),
-    cylinderType: parseCylinder Type(itemName || text(source, ['modelNumber'])),
+    cylinderType: parseCylinderType(itemName || text(source, ['modelNumber'])),
     serviceStatusId: numberOrNull(source.serviceStatusFK),
     serviceStatus: statusById.get(String(source.serviceStatusFK)) || '',
     status: first(source, ['status']),
@@ -741,7 +741,7 @@ function numeric(value) {
   return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
-function parseCylinder Type(value) {
+function parseCylinderType(value) {
   const textValue = String(value || '');
   const patterns = [
     /\b(1\.5|1\.50)\b/,
