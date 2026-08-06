@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#7f1116">
+  <title>WTFD SCBA Cylinder Lifecycle</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-logo"><img src="./wtfd-logo.png" alt="Washington Township Fire Department logo"></div>
+      <div class="brand-copy"><small>Washington Township</small><strong>Fire Department</strong></div>
+    </div>
+    <nav class="side-nav" aria-label="Primary navigation">
+      <button class="nav-item active" data-view="overview"><span class="nav-icon">⌂</span><span>Overview</span></button>
+      <button class="nav-item" data-view="testing"><span class="nav-icon">✓</span><span>Hydrostatic Testing</span></button>
+      <button class="nav-item" data-view="planning"><span class="nav-icon">↗</span><span>Replacement Planning</span></button>
+      <button class="nav-item" data-view="inventory"><span class="nav-icon">▤</span><span>Inventory</span></button>
+      <button class="nav-item" data-view="quality"><span class="nav-icon">◇</span><span>Data Quality</span></button>
+    </nav>
+    <div class="sidebar-spacer"></div>
+    <div class="sidebar-panel">
+      <small>Planning threshold</small>
+      <strong><span id="sidebarPlanningAge">15</span> years</strong>
+      <button id="sidebarPlanningButton" class="ghost-small">Change threshold</button>
+    </div>
+    <div class="sidebar-panel data-panel">
+      <small>Data source</small>
+      <strong><span class="source-dot"></span> OperativeIQ</strong>
+      <span>Asset Class: SCBA Cylinders</span>
+    </div>
+    <div class="version">WTFD SCBA Cylinder Lifecycle · v10</div>
+  </aside>
+
+  <div class="workspace">
+    <header class="topbar">
+      <button class="menu-button" id="menuButton" aria-label="Open navigation">☰</button>
+      <div class="topbar-brand">
+        <img class="topbar-logo" src="./wtfd-logo.png" alt="Washington Township Fire Department logo">
+        <div class="title-block">
+        <div class="eyebrow">WASHINGTON TOWNSHIP FIRE DEPARTMENT</div>
+        <h1>SCBA Cylinder Lifecycle</h1>
+        <p>Hydrostatic testing readiness, cylinder inventory health, and 15-year retirement planning</p>
+        </div>
+      </div>
+      <div class="live-panel">
+        <div class="live-line"><span id="liveDot" class="live-dot loading"></span><strong id="liveStatus">Connecting…</strong></div>
+        <small id="asOf">Loading current OperativeIQ data</small>
+        <button id="headerRefresh" class="icon-button" title="Refresh live data" aria-label="Refresh live data">↻</button>
+      </div>
+    </header>
+
+    <main>
+      <div id="alert"></div>
+      <section id="overview" class="view active">
+        <div class="page-heading">
+          <div><span class="section-kicker">COMMAND VIEW</span><h2>Lifecycle Overview</h2><p>Live readiness and capital-planning snapshot for the selected SCBA cylinder inventory.</p></div>
+          <div class="filters">
+            <label><span>Testing year</span><select id="yearFilter"></select></label>
+            <label><span>Inventory scope</span><select id="scopeFilter"><option value="active">Active scba</option><option value="all">All records</option><option value="inactive">Inactive only</option></select></label>
+            <label><span>Planning age</span><select id="planningAge"><option>10</option><option selected>15</option><option>20</option><option>25</option></select></label>
+          </div>
+        </div>
+
+        <div id="kpis" class="kpi-grid"></div>
+        <div id="secondaryKpis" class="secondary-kpis"></div>
+
+        <div class="dashboard-grid">
+          <article class="panel completion-panel">
+            <div class="panel-head"><div><span class="panel-kicker">TESTING</span><h3>Hydro Compliance</h3></div><button class="text-action view-link" data-target="testing">View all</button></div>
+            <div class="completion-layout">
+              <div id="completionDonut" class="donut"><div><strong id="completionPct">0%</strong><span>Complete</span></div></div>
+              <div id="testingLegend" class="legend-list"></div>
+            </div>
+            <div class="panel-foot">Based on confirmed maintenance forms 5 and 34.</div>
+          </article>
+
+          <article class="panel worklist-panel">
+            <div class="panel-head"><div><span class="panel-kicker">ACTION QUEUE</span><h3>Priority Worklist</h3></div><button class="text-action view-link" data-target="testing">View all</button></div>
+            <div id="priorityList" class="priority-list"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head"><div><span class="panel-kicker">LIFECYCLE</span><h3>Cylinder Age Distribution</h3></div><span id="averageAgeLabel" class="meta-label"></span></div>
+            <div id="ageChart" class="column-chart"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head"><div><span class="panel-kicker">INVENTORY MIX</span><h3>Manufacturer Breakdown</h3></div><span id="manufacturerTotal" class="meta-label"></span></div>
+            <div class="split-chart"><div id="manufacturerDonut" class="donut manufacturer-donut"><div><strong id="manufacturerCenter">0</strong><span>Cylinder</span></div></div><div id="manufacturerLegend" class="legend-list compact"></div></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head"><div><span class="panel-kicker">INVENTORY MIX</span><h3>Cylinder Type Distribution</h3></div><span id="cylinderTypeTotal" class="meta-label"></span></div>
+            <div class="split-chart"><div id="cylinderTypeDonut" class="donut cylinderType-donut"><div><strong>Ø</strong><span>Sizes</span></div></div><div id="cylinderTypeLegend" class="legend-list compact"></div></div>
+          </article>
+
+          <article class="panel quick-panel">
+            <div class="panel-head"><div><span class="panel-kicker">SHORTCUTS</span><h3>Quick Actions</h3></div></div>
+            <div class="quick-actions">
+              <button class="quick-action danger view-link" data-target="testing" data-due="true"><span>!</span><strong>View Due Cylinders</strong><small>Open testing worklist</small></button>
+              <button class="quick-action purple view-link" data-target="planning"><span>↗</span><strong>Replacement Plan</strong><small>Review lifecycle priorities</small></button>
+              <button class="quick-action blue view-link" data-target="inventory"><span>⌕</span><strong>Search Inventory</strong><small>Find any cylinder</small></button>
+              <button class="quick-action green view-link" data-target="quality"><span>◇</span><strong>Data Quality</strong><small>Resolve missing fields</small></button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="testing" class="view">
+        <div class="page-heading"><div><span class="section-kicker">COMPLIANCE</span><h2>Hydrostatic Testing</h2><p>Confirmed hydrostatic test history for each SCBA cylinder asset.</p></div></div>
+        <div class="section-toolbar">
+          <div class="search-box"><span>⌕</span><input id="testingSearch" placeholder="Search cylinder, serial number, manufacturer, or pressure"></div>
+          <label class="toggle"><input id="dueOnly" type="checkbox"><span></span>Due only</label>
+          <div id="testingFocus" class="focus-pill hidden"></div><div id="testingCount" class="result-count"></div>
+        </div>
+        <div class="table-card"><table id="testingTable"><thead><tr><th>Status</th><th>Cylinder</th><th>Cylinder Type / Pressure</th><th>Manufacturer</th><th>Latest test</th><th>Next maintenance</th><th>History</th></tr></thead><tbody></tbody></table></div>
+      </section>
+
+      <section id="planning" class="view">
+        <div class="page-heading"><div><span class="section-kicker">CAPITAL PLANNING</span><h2>Replacement Planning</h2><p>Age-based lifecycle planning using the selected threshold and current OperativeIQ item values.</p></div><div id="planningFocus" class="focus-pill hidden"></div></div>
+        <div id="planningKpis" class="kpi-grid planning-kpis"></div>
+        <div class="panel forecast-panel"><div class="panel-head"><div><span class="panel-kicker">FORECAST</span><h3>Replacement Timeline</h3></div></div><div id="forecastChart" class="forecast-chart"></div></div>
+        <div class="table-card"><table id="planningTable"><thead><tr><th>Priority</th><th>Planning year</th><th>Cylinder</th><th>Cylinder Type / Pressure</th><th>Manufacturer</th><th>In service</th><th>Age</th><th>Latest test</th><th>Est. value</th></tr></thead><tbody></tbody></table></div>
+      </section>
+
+      <section id="inventory" class="view">
+        <div class="page-heading"><div><span class="section-kicker">MASTER DATA</span><h2>SCBA Cylinders Inventory</h2><p>Live SCBA Cylinders asset-class records from OperativeIQ.</p></div></div>
+        <div class="section-toolbar"><div class="search-box"><span>⌕</span><input id="inventorySearch" placeholder="Search asset tag, description, or manufacturer"></div><div id="inventoryCount" class="result-count"></div></div>
+        <div class="table-card"><table id="inventoryTable"><thead><tr><th>Asset</th><th>Status</th><th>Cylinder Type / Pressure</th><th>Manufacturer</th><th>In service</th><th>Age</th><th>Latest test</th><th>Next maintenance</th><th>History</th></tr></thead><tbody></tbody></table></div>
+      </section>
+
+      <section id="quality" class="view">
+        <div class="page-heading"><div><span class="section-kicker">DATA GOVERNANCE</span><h2>Data Quality</h2><p>Records requiring correction before relying on lifecycle forecasts.</p></div></div>
+        <div id="qualityKpis" class="kpi-grid quality-kpis"></div>
+        <div class="quality-grid">
+          <article class="panel"><div class="panel-head"><h3>Missing manufacturer</h3><span class="issue-dot amber"></span></div><div id="missingManufacturer" class="quality-list"></div></article>
+          <article class="panel"><div class="panel-head"><h3>Missing in-service date</h3><span class="issue-dot red"></span></div><div id="missingDate" class="quality-list"></div></article>
+          <article class="panel"><div class="panel-head"><h3>Missing next maintenance</h3><span class="issue-dot purple"></span></div><div id="missingMaintenance" class="quality-list"></div></article>
+          <article class="panel"><div class="panel-head"><h3>No test history</h3><span class="issue-dot blue"></span></div><div id="missingHistory" class="quality-list"></div></article>
+        </div>
+        <article class="panel limitations"><div class="panel-head"><h3>Current integration limits</h3></div><ul id="limitations"></ul></article>
+      </section>
+    </main>
+  </div>
+</div>
+
+<div id="drawer" class="drawer" aria-hidden="true"><div class="drawer-head"><div><span class="section-kicker">HOSE ASSET</span><h2 id="drawerTitle"></h2></div><button id="closeDrawer" aria-label="Close asset details">×</button></div><div id="drawerBody"></div></div>
+<div id="scrim" class="scrim"></div>
+<div id="toast" class="toast"></div>
+<script src="./app.js"></script>
+</body>
+</html>
