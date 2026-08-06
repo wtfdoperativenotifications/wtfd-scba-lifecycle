@@ -32,7 +32,7 @@
       <strong><span class="source-dot"></span> OperativeIQ</strong>
       <span>Asset Class: SCBA Cylinders</span>
     </div>
-    <div class="version">WTFD SCBA Cylinder Lifecycle · v10</div>
+    <div class="version">WTFD SCBA Cylinder Lifecycle · v11</div>
   </aside>
 
   <div class="workspace">
@@ -43,7 +43,7 @@
         <div class="title-block">
         <div class="eyebrow">WASHINGTON TOWNSHIP FIRE DEPARTMENT</div>
         <h1>SCBA Cylinder Lifecycle</h1>
-        <p>Hydrostatic testing readiness, cylinder inventory health, and 15-year retirement planning</p>
+        <p>Hydrostatic testing readiness, planned decommission scheduling, and replacement forecasting</p>
         </div>
       </div>
       <div class="live-panel">
@@ -59,8 +59,8 @@
         <div class="page-heading">
           <div><span class="section-kicker">COMMAND VIEW</span><h2>Lifecycle Overview</h2><p>Live readiness and capital-planning snapshot for the selected SCBA cylinder inventory.</p></div>
           <div class="filters">
-            <label><span>Testing year</span><select id="yearFilter"></select></label>
-            <label><span>Inventory scope</span><select id="scopeFilter"><option value="active">Active scba</option><option value="all">All records</option><option value="inactive">Inactive only</option></select></label>
+            
+            <label><span>Inventory scope</span><select id="scopeFilter"><option value="active">Active cylinders</option><option value="all">All records</option><option value="inactive">Inactive only</option></select></label>
             <label><span>Planning age</span><select id="planningAge"><option>10</option><option selected>15</option><option>20</option><option>25</option></select></label>
           </div>
         </div>
@@ -75,7 +75,7 @@
               <div id="completionDonut" class="donut"><div><strong id="completionPct">0%</strong><span>Complete</span></div></div>
               <div id="testingLegend" class="legend-list"></div>
             </div>
-            <div class="panel-foot">Based on confirmed maintenance forms 5 and 34.</div>
+            <div class="panel-foot">Based on confirmed hydrostatic maintenance form 37 and maintenance type 32.</div>
           </article>
 
           <article class="panel worklist-panel">
@@ -94,8 +94,8 @@
           </article>
 
           <article class="panel chart-panel">
-            <div class="panel-head"><div><span class="panel-kicker">INVENTORY MIX</span><h3>Cylinder Type Distribution</h3></div><span id="cylinderTypeTotal" class="meta-label"></span></div>
-            <div class="split-chart"><div id="cylinderTypeDonut" class="donut cylinderType-donut"><div><strong>Ø</strong><span>Sizes</span></div></div><div id="cylinderTypeLegend" class="legend-list compact"></div></div>
+            <div class="panel-head"><div><span class="panel-kicker">INVENTORY MIX</span><h3>Decommission Date Source</h3></div><span id="cylinderTypeTotal" class="meta-label"></span></div>
+            <div class="split-chart"><div id="cylinderTypeDonut" class="donut cylinderType-donut"><div><strong>↗</strong><span>Plans</span></div></div><div id="cylinderTypeLegend" class="legend-list compact"></div></div>
           </article>
 
           <article class="panel quick-panel">
@@ -117,20 +117,20 @@
           <label class="toggle"><input id="dueOnly" type="checkbox"><span></span>Due only</label>
           <div id="testingFocus" class="focus-pill hidden"></div><div id="testingCount" class="result-count"></div>
         </div>
-        <div class="table-card"><table id="testingTable"><thead><tr><th>Status</th><th>Cylinder</th><th>Cylinder Type / Pressure</th><th>Manufacturer</th><th>Latest test</th><th>Next maintenance</th><th>History</th></tr></thead><tbody></tbody></table></div>
+        <div class="table-card"><table id="testingTable"><thead><tr><th>Status</th><th>Cylinder</th><th>Serial</th><th>Manufacturer</th><th>Latest hydro</th><th>Next hydro</th><th>Timing</th><th>History</th></tr></thead><tbody></tbody></table></div>
       </section>
 
       <section id="planning" class="view">
-        <div class="page-heading"><div><span class="section-kicker">CAPITAL PLANNING</span><h2>Replacement Planning</h2><p>Age-based lifecycle planning using the selected threshold and current OperativeIQ item values.</p></div><div id="planningFocus" class="focus-pill hidden"></div></div>
+        <div class="page-heading"><div><span class="section-kicker">CAPITAL PLANNING</span><h2>Replacement Planning</h2><p>Planned decommission dates from OperativeIQ are authoritative; estimated dates are used only when a planned date is missing.</p></div><div id="planningFocus" class="focus-pill hidden"></div></div>
         <div id="planningKpis" class="kpi-grid planning-kpis"></div>
         <div class="panel forecast-panel"><div class="panel-head"><div><span class="panel-kicker">FORECAST</span><h3>Replacement Timeline</h3></div></div><div id="forecastChart" class="forecast-chart"></div></div>
-        <div class="table-card"><table id="planningTable"><thead><tr><th>Priority</th><th>Planning year</th><th>Cylinder</th><th>Cylinder Type / Pressure</th><th>Manufacturer</th><th>In service</th><th>Age</th><th>Latest test</th><th>Est. value</th></tr></thead><tbody></tbody></table></div>
+        <div class="table-card"><table id="planningTable"><thead><tr><th>Priority</th><th>Year</th><th>Date source</th><th>Cylinder</th><th>Manufacturer</th><th>In service</th><th>Decommission</th><th>Age</th><th>Est. value</th></tr></thead><tbody></tbody></table></div>
       </section>
 
       <section id="inventory" class="view">
         <div class="page-heading"><div><span class="section-kicker">MASTER DATA</span><h2>SCBA Cylinders Inventory</h2><p>Live SCBA Cylinders asset-class records from OperativeIQ.</p></div></div>
         <div class="section-toolbar"><div class="search-box"><span>⌕</span><input id="inventorySearch" placeholder="Search asset tag, description, or manufacturer"></div><div id="inventoryCount" class="result-count"></div></div>
-        <div class="table-card"><table id="inventoryTable"><thead><tr><th>Asset</th><th>Status</th><th>Cylinder Type / Pressure</th><th>Manufacturer</th><th>In service</th><th>Age</th><th>Latest test</th><th>Next maintenance</th><th>History</th></tr></thead><tbody></tbody></table></div>
+        <div class="table-card"><table id="inventoryTable"><thead><tr><th>Asset</th><th>Status</th><th>Serial</th><th>Manufacturer</th><th>In service</th><th>Hydro status</th><th>Next hydro</th><th>Decommission</th><th>History</th></tr></thead><tbody></tbody></table></div>
       </section>
 
       <section id="quality" class="view">
@@ -148,7 +148,7 @@
   </div>
 </div>
 
-<div id="drawer" class="drawer" aria-hidden="true"><div class="drawer-head"><div><span class="section-kicker">HOSE ASSET</span><h2 id="drawerTitle"></h2></div><button id="closeDrawer" aria-label="Close asset details">×</button></div><div id="drawerBody"></div></div>
+<div id="drawer" class="drawer" aria-hidden="true"><div class="drawer-head"><div><span class="section-kicker">SCBA CYLINDER</span><h2 id="drawerTitle"></h2></div><button id="closeDrawer" aria-label="Close asset details">×</button></div><div id="drawerBody"></div></div>
 <div id="scrim" class="scrim"></div>
 <div id="toast" class="toast"></div>
 <script src="./app.js"></script>

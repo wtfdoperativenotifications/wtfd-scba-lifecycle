@@ -109,8 +109,8 @@ export default {
       return json({
         success: true,
         application: 'WTFD SCBA Cylinder Lifecycle',
-        phase: 8,
-        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V8',
+        phase: 11,
+        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V11',
         operativeCredentialsConfigured: Boolean(env.OPERATIVE_CLIENT_ID && env.OPERATIVE_CLIENT_SECRET),
         adminTokenConfigured: Boolean(env.SYNC_ADMIN_TOKEN),
         inventoryPathConfigured: Boolean(env.SCBA_INVENTORY_PATH),
@@ -522,7 +522,7 @@ async function buildDashboardPayload(env, url) {
   const linkedMaintenance = fixedAssets
     .filter(row => scbaItemIds.has(String(row.itemId)))
     .map(record => normalizeMaintenanceLink(record, itemById.get(String(record.itemId))))
-    .filter(row => row.formId === 5 || row.formId === 34);
+    .filter(row => row.formId === 37 && row.type === 32);
 
   const maintenanceByItem = new Map();
   for (const row of linkedMaintenance) {
@@ -552,6 +552,7 @@ async function buildDashboardPayload(env, url) {
       modelYear: item.modelYear,
       inServiceDate: item.inServiceDate,
       nextMaintenanceDate: item.nextMaintenanceDate,
+      plannedDecommissionDate: item.decommissionDate,
       decommissionDate: item.decommissionDate,
       estimatedReplacementCost: item.estimatedReplacementCost,
       serviceStatus: item.serviceStatus,
@@ -569,7 +570,7 @@ async function buildDashboardPayload(env, url) {
 
   return {
     success: true,
-    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V8',
+    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V11',
     generatedAt: new Date().toISOString(),
     refreshMinutes: 15,
     module: 'SCBA_CYLINDER',
@@ -591,11 +592,12 @@ async function buildDashboardPayload(env, url) {
       missingManufacturer: activeAssets.filter(row => !row.manufacturer).length,
       missingInServiceDate: activeAssets.filter(row => !row.inServiceDate).length,
       missingNextMaintenanceDate: activeAssets.filter(row => !row.nextMaintenanceDate).length,
-      missingCylinderType: activeAssets.filter(row => !row.cylinderType).length
+      missingCylinderType: activeAssets.filter(row => !row.cylinderType).length,
+      missingPlannedDecommissionDate: activeAssets.filter(row => !row.plannedDecommissionDate).length
     },
     limitations: [
-      'Detailed pass/fail, pressure, leak, coupling, and station answers are not yet resolved from formAnswerUniqueId.',
-      'Apparatus and station assignment are not exposed by the confirmed inventory endpoint in this build.',
+      'Detailed hydrostatic form answers are not yet resolved from formAnswerUniqueId.',
+      'Planned decommission dates use OperativeIQ decommissionOrOutOfServiceDate when populated; otherwise the dashboard shows a clearly labeled 15-year estimate.',
       'Replacement costs use the current item price stored in OperativeIQ when available and are planning estimates only.'
     ],
     assets
@@ -604,7 +606,7 @@ async function buildDashboardPayload(env, url) {
 
 async function resolveCylinderContext(env, url, token) {
   const classes = await loadAssetClasses(token);
-  const explicit = numberOrNull(url.searchParams.get('assetClassId') || env.SCBA_ASSET_CLASS_ID);
+  const explicit = numberOrNull(url.searchParams.get('assetClassId') || env.SCBA_ASSET_CLASS_ID || 41);
   let assetClassId = explicit;
   let assetClassName = '';
   let items = [];
