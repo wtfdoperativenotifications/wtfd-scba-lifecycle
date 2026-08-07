@@ -1,8 +1,8 @@
-# WTFD SCBA Cylinder Lifecycle — Version 9
+# WTFD SCBA Cylinder Lifecycle — Version 15
 
 A standalone Cloudflare Worker and static dashboard for Washington Township Fire Department SCBA cylinder lifecycle management.
 
-Version 7 introduces a generic read-only asset lifecycle engine using live OperativeIQ data. SCBA Cylinders is the first configured module.
+Version 15 introduces a generic read-only asset lifecycle engine using live OperativeIQ data. SCBA Cylinders is the first configured module.
 
 ## Cloudflare secrets
 
@@ -12,7 +12,7 @@ Keep the existing encrypted secrets:
 - `OPERATIVE_CLIENT_SECRET`
 - `SYNC_ADMIN_TOKEN`
 
-No D1 binding is used in Version 7.
+No D1 binding is used in Version 15.
 
 ## Deploy
 
@@ -43,6 +43,11 @@ Open the Worker `/api/health` page, open the browser console, and run:
 ```
 
 After confirming the returned class ID, run `/api/scba/engine-preview?assetClassId=ID` in the same manner.
-## Version 10 UI update
+## Version 15 UI update
 
-Version 10 adds official department branding and interactive overview KPI cards that navigate to pre-filtered inventory, annual-testing, and replacement-planning worklists.
+Version 15 adds official department branding and interactive overview KPI cards that navigate to pre-filtered inventory, annual-testing, and replacement-planning worklists.
+
+
+## Version 15 planned decommission integration
+
+Version 15 joins the OperativeIQ `SCBA Cylinders Decommission Planning` report to live SCBA inventory using Part UPC / Part Description. The report contains 283 maintenance/report rows but 203 unique cylinders; each cylinder is counted once. Planned dates are authoritative for the 203 matched active cylinders. Unmatched cylinders continue to use the clearly labeled planning-age estimate.
