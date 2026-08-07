@@ -109,8 +109,8 @@ export default {
       return json({
         success: true,
         application: 'WTFD SCBA Cylinder Lifecycle',
-        phase: 12,
-        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V12',
+        phase: 13,
+        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V13',
         operativeCredentialsConfigured: Boolean(env.OPERATIVE_CLIENT_ID && env.OPERATIVE_CLIENT_SECRET),
         adminTokenConfigured: Boolean(env.SYNC_ADMIN_TOKEN),
         inventoryPathConfigured: Boolean(env.SCBA_INVENTORY_PATH),
@@ -484,7 +484,7 @@ async function scbaEnginePreview(env, url) {
 
 async function cachedDashboardResponse(request, env, url) {
   const cache = caches.default;
-  const cacheKey = new Request(`${url.origin}/api/dashboard`, { method: 'GET' });
+  const cacheKey = new Request(`${url.origin}/api/dashboard/scba-v13-ac41-f37-t32`, { method: 'GET' });
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
 
@@ -501,9 +501,15 @@ async function cachedDashboardResponse(request, env, url) {
 async function buildDashboardPayload(env, url) {
   const token = await getAccessToken(env);
   const context = await resolveCylinderContext(env, url, token);
+  if (Number(context.assetClassId) !== 41) {
+    throw new Error(`SCBA dashboard integrity check failed: expected asset class 41, received ${context.assetClassId}.`);
+  }
   const scbaItems = context.items.filter(
-    item => String(item.assetClassId ?? '') === String(context.assetClassId)
+    item => String(item.assetClassId ?? '') === '41'
   );
+  if (!scbaItems.length) {
+    throw new Error('SCBA dashboard integrity check failed: asset class 41 returned no cylinders.');
+  }
 
   const [manufacturers, statuses, fixedAssets] = await Promise.all([
     loadOptionalLookup(token, ['/api/manufacturers', '/api/manufacturer']),
@@ -545,6 +551,9 @@ async function buildDashboardPayload(env, url) {
     return {
       itemId: item.itemId,
       assetTag: item.assetTag,
+      serialNumber: item.serialNumber,
+      itemNumber: item.itemNumber,
+      partUpc: item.partUpc,
       description: item.assetDescription,
       manufacturer: item.manufacturer,
       cylinderType: item.cylinderType,
@@ -570,7 +579,7 @@ async function buildDashboardPayload(env, url) {
 
   return {
     success: true,
-    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V12',
+    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V13',
     generatedAt: new Date().toISOString(),
     refreshMinutes: 15,
     module: 'SCBA_CYLINDER',
@@ -594,6 +603,16 @@ async function buildDashboardPayload(env, url) {
       missingNextMaintenanceDate: activeAssets.filter(row => !row.nextMaintenanceDate).length,
       missingCylinderType: activeAssets.filter(row => !row.cylinderType).length,
       missingPlannedDecommissionDate: activeAssets.filter(row => !row.plannedDecommissionDate).length
+    },
+    datasetIntegrity: {
+      expectedAssetClassId: 41,
+      actualAssetClassId: context.assetClassId,
+      assetClassName: context.assetClassName,
+      hydroFormId: 37,
+      hydroMaintenanceType: 32,
+      uniqueCylinderCount: new Set(assets.map(row => String(row.itemId))).size,
+      duplicateCylinderIds: assets.length - new Set(assets.map(row => String(row.itemId))).size,
+      passed: Number(context.assetClassId) === 41 && assets.length === new Set(assets.map(row => String(row.itemId))).size
     },
     limitations: [
       'Detailed hydrostatic form answers are not yet resolved from formAnswerUniqueId.',
