@@ -109,8 +109,8 @@ export default {
       return json({
         success: true,
         application: 'WTFD SCBA Cylinder Lifecycle',
-        phase: 11,
-        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V11',
+        phase: 12,
+        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V12',
         operativeCredentialsConfigured: Boolean(env.OPERATIVE_CLIENT_ID && env.OPERATIVE_CLIENT_SECRET),
         adminTokenConfigured: Boolean(env.SYNC_ADMIN_TOKEN),
         inventoryPathConfigured: Boolean(env.SCBA_INVENTORY_PATH),
@@ -570,7 +570,7 @@ async function buildDashboardPayload(env, url) {
 
   return {
     success: true,
-    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V11',
+    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V12',
     generatedAt: new Date().toISOString(),
     refreshMinutes: 15,
     module: 'SCBA_CYLINDER',
@@ -606,7 +606,7 @@ async function buildDashboardPayload(env, url) {
 
 async function resolveCylinderContext(env, url, token) {
   const classes = await loadAssetClasses(token);
-  const explicit = numberOrNull(url.searchParams.get('assetClassId') || env.SCBA_ASSET_CLASS_ID || 41);
+  const explicit = numberOrNull(url.searchParams.get('assetClassId') || 41); // Confirmed WTFD SCBA Cylinder asset class
   let assetClassId = explicit;
   let assetClassName = '';
   let items = [];

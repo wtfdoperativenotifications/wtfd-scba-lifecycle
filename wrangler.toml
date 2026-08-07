@@ -7,7 +7,7 @@ directory = "./public"
 binding = "ASSETS"
 
 [vars]
-SCBA_ASSET_CLASS_ID = "16"
+SCBA_ASSET_CLASS_ID = "41"
 
 # Configure these as encrypted Worker secrets in Cloudflare:
 #   OPERATIVE_CLIENT_ID
