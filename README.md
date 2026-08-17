@@ -1,4 +1,9 @@
-# WTFD SCBA Cylinder Lifecycle — Version 15
+# WTFD SCBA Cylinder Lifecycle — 
+## Version 16
+
+Version 16 adds a lightweight hydro workflow based on the cylinder's current OperativeIQ warehouse. Cylinders assigned to **Due for Hydro** are automatically labeled **READY FOR HYDRO**, surfaced in an overview KPI, and can be filtered on the Hydrostatic Testing page. Moving the cylinder back to its normal warehouse clears the workflow status automatically; hydro compliance remains a separate status.
+
+Version 15
 
 A standalone Cloudflare Worker and static dashboard for Washington Township Fire Department SCBA cylinder lifecycle management.
 

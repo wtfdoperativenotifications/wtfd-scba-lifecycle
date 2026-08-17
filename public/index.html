@@ -32,7 +32,7 @@
       <strong><span class="source-dot"></span> OperativeIQ</strong>
       <span>Asset Class: SCBA Cylinders</span>
     </div>
-    <div class="version">WTFD SCBA Cylinder Lifecycle · v15</div>
+    <div class="version">WTFD SCBA Cylinder Lifecycle · v16</div>
   </aside>
 
   <div class="workspace">
@@ -115,9 +115,10 @@
         <div class="section-toolbar">
           <div class="search-box"><span>⌕</span><input id="testingSearch" placeholder="Search cylinder, serial number, manufacturer, or pressure"></div>
           <label class="toggle"><input id="dueOnly" type="checkbox"><span></span>Due only</label>
+          <label class="toggle"><input id="readyOnly" type="checkbox"><span></span>Ready for hydro</label>
           <div id="testingFocus" class="focus-pill hidden"></div><div id="testingCount" class="result-count"></div>
         </div>
-        <div class="table-card"><table id="testingTable"><thead><tr><th>Status</th><th>Cylinder</th><th>Serial</th><th>Manufacturer</th><th>Latest hydro</th><th>Next hydro</th><th>Timing</th><th>History</th></tr></thead><tbody></tbody></table></div>
+        <div class="table-card"><table id="testingTable"><thead><tr><th>Hydro status</th><th>Workflow</th><th>Cylinder</th><th>Serial</th><th>Manufacturer</th><th>Warehouse</th><th>Latest hydro</th><th>Next hydro</th><th>Timing</th><th>History</th></tr></thead><tbody></tbody></table></div>
       </section>
 
       <section id="planning" class="view">
@@ -130,7 +131,7 @@
       <section id="inventory" class="view">
         <div class="page-heading"><div><span class="section-kicker">MASTER DATA</span><h2>SCBA Cylinders Inventory</h2><p>Live SCBA Cylinders asset-class records from OperativeIQ.</p></div></div>
         <div class="section-toolbar"><div class="search-box"><span>⌕</span><input id="inventorySearch" placeholder="Search asset tag, description, or manufacturer"></div><div id="inventoryCount" class="result-count"></div></div>
-        <div class="table-card"><table id="inventoryTable"><thead><tr><th>Asset</th><th>Status</th><th>Serial</th><th>Manufacturer</th><th>In service</th><th>Hydro status</th><th>Next hydro</th><th>Decommission</th><th>History</th></tr></thead><tbody></tbody></table></div>
+        <div class="table-card"><table id="inventoryTable"><thead><tr><th>Asset</th><th>Status</th><th>Workflow</th><th>Warehouse</th><th>Serial</th><th>Manufacturer</th><th>In service</th><th>Hydro status</th><th>Next hydro</th><th>Decommission</th><th>History</th></tr></thead><tbody></tbody></table></div>
       </section>
 
       <section id="quality" class="view">

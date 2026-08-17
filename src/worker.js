@@ -120,7 +120,7 @@ export default {
         success: true,
         application: 'WTFD SCBA Cylinder Lifecycle',
         phase: 13,
-        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V15',
+        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16',
         operativeCredentialsConfigured: Boolean(env.OPERATIVE_CLIENT_ID && env.OPERATIVE_CLIENT_SECRET),
         adminTokenConfigured: Boolean(env.SYNC_ADMIN_TOKEN),
         inventoryPathConfigured: Boolean(env.SCBA_INVENTORY_PATH),
@@ -341,12 +341,14 @@ async function liveCylinderInventory(env, url) {
   const context = await resolveCylinderContext(env, url, token);
   const manufacturers = await loadOptionalLookup(token, ['/api/manufacturers', '/api/manufacturer']);
   const statuses = await loadOptionalLookup(token, ['/api/asset-service-statuses', '/api/asset-service-status']);
+  const locations = await loadOptionalLookup(token, ['/api/locations', '/api/location', '/api/rooms', '/api/supply-rooms']);
   const manufacturerById = lookupNameMap(manufacturers.rows, ['manufacturerName', 'name', 'companyName']);
   const statusById = lookupNameMap(statuses.rows, ['name', 'statusName', 'description']);
+  const locationById = lookupNameMap(locations.rows, ['locationName', 'name', 'roomName', 'supplyRoomName', 'warehouseName', 'description']);
 
   const rows = context.items
     .filter(item => String(item.assetClassId ?? '') === String(context.assetClassId))
-    .map(item => normalizeLiveItem(item, context.assetClassName, manufacturerById, statusById));
+    .map(item => normalizeLiveItem(item, context.assetClassName, manufacturerById, statusById, locationById));
 
   return {
     success: true,
@@ -359,7 +361,8 @@ async function liveCylinderInventory(env, url) {
     lookupEndpoints: {
       assetClasses: context.assetClassPath,
       manufacturers: manufacturers.path,
-      serviceStatuses: statuses.path
+      serviceStatuses: statuses.path,
+      locations: locations.path
     },
     detectedFields: uniqueFields(context.items),
     dataQuality: liveInventoryQuality(rows),
@@ -417,9 +420,10 @@ async function scbaEnginePreview(env, url) {
     item => String(item.assetClassId ?? '') === String(context.assetClassId)
   );
 
-  const [manufacturers, statuses, fixedAssets] = await Promise.all([
+  const [manufacturers, statuses, locations, fixedAssets] = await Promise.all([
     loadOptionalLookup(token, ['/api/manufacturers', '/api/manufacturer']),
     loadOptionalLookup(token, ['/api/asset-service-statuses', '/api/asset-service-status']),
+    loadOptionalLookup(token, ['/api/locations', '/api/location', '/api/rooms', '/api/supply-rooms']),
     fetchAll('/api/fixed-assets', token, MAX_RECORDS)
   ]);
 
@@ -481,7 +485,8 @@ async function scbaEnginePreview(env, url) {
     lookupEndpoints: {
       assetClasses: context.assetClassPath,
       manufacturers: manufacturers.path,
-      serviceStatuses: statuses.path
+      serviceStatuses: statuses.path,
+      locations: locations.path
     },
     dataQuality: liveInventoryQuality(inventoryRows),
     assets,
@@ -521,16 +526,18 @@ async function buildDashboardPayload(env, url) {
     throw new Error('SCBA dashboard integrity check failed: asset class 41 returned no cylinders.');
   }
 
-  const [manufacturers, statuses, fixedAssets] = await Promise.all([
+  const [manufacturers, statuses, locations, fixedAssets] = await Promise.all([
     loadOptionalLookup(token, ['/api/manufacturers', '/api/manufacturer']),
     loadOptionalLookup(token, ['/api/asset-service-statuses', '/api/asset-service-status']),
+    loadOptionalLookup(token, ['/api/locations', '/api/location', '/api/rooms', '/api/supply-rooms']),
     fetchAll('/api/fixed-assets', token, MAX_RECORDS)
   ]);
 
   const manufacturerById = lookupNameMap(manufacturers.rows, ['manufacturerName', 'name', 'companyName']);
   const statusById = lookupNameMap(statuses.rows, ['name', 'statusName', 'description']);
+  const locationById = lookupNameMap(locations.rows, ['locationName', 'name', 'roomName', 'supplyRoomName', 'warehouseName', 'description']);
   const inventoryRows = scbaItems.map(item =>
-    normalizeLiveItem(item, context.assetClassName, manufacturerById, statusById)
+    normalizeLiveItem(item, context.assetClassName, manufacturerById, statusById, locationById)
   );
 
   const scbaItemIds = new Set(scbaItems.map(item => String(item.id)));
@@ -584,6 +591,9 @@ async function buildDashboardPayload(env, url) {
       decommissionDate: item.decommissionDate,
       estimatedReplacementCost: item.estimatedReplacementCost,
       serviceStatus: item.serviceStatus,
+      warehouse: item.warehouse,
+      warehouseId: item.warehouseId,
+      readyForHydro: item.readyForHydro,
       active: item.status === true,
       latestTestDate: history[0]?.maintenanceDate || '',
       testHistory: history
@@ -598,7 +608,7 @@ async function buildDashboardPayload(env, url) {
 
   return {
     success: true,
-    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V15',
+    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16',
     generatedAt: new Date().toISOString(),
     refreshMinutes: 15,
     module: 'SCBA_CYLINDER',
@@ -724,11 +734,21 @@ function normalizeAssetClass(source) {
   };
 }
 
-function normalizeLiveItem(source, assetClassName, manufacturerById, statusById) {
+function normalizeLiveItem(source, assetClassName, manufacturerById, statusById, locationById = new Map()) {
   const itemId = first(source, ['id']);
   const itemName = text(source, ['itemName']);
   const itemNumber = text(source, ['itemNumber']);
   const partUpc = text(source, ['partUpc']);
+  const locationObject = first(source, ['location', 'assignedLocation', 'room', 'supplyRoom', 'warehouse']);
+  const directId = numberOrNull(first(source, ['locationId', 'locationFK', 'roomId', 'roomFK', 'supplyRoomId', 'supplyRoomFK', 'warehouseId', 'warehouseFK']));
+  const nestedId = locationObject && typeof locationObject === 'object' ? numberOrNull(first(locationObject, ['id', 'locationId', 'roomId', 'supplyRoomId', 'warehouseId'])) : null;
+  const warehouseId = directId !== null ? directId : nestedId;
+  const directWarehouse = text(source, ['locationName', 'assignedLocationName', 'roomName', 'supplyRoomName', 'warehouseName']) ||
+    (locationObject && typeof locationObject === 'object'
+      ? text(locationObject, ['locationName', 'name', 'roomName', 'supplyRoomName', 'warehouseName', 'description'])
+      : (typeof locationObject === 'string' ? locationObject.trim() : ''));
+  const warehouse = directWarehouse || (warehouseId !== null ? (locationById.get(String(warehouseId)) || '') : '');
+  const readyForHydro = /\bdue\s+for\s+hydro\b/i.test(warehouse);
   return {
     itemId,
     assetClassId: numberOrNull(source.assetClassId),
@@ -750,6 +770,9 @@ function normalizeLiveItem(source, assetClassName, manufacturerById, statusById)
     cylinderType: parseCylinderType(itemName || text(source, ['modelNumber'])),
     serviceStatusId: numberOrNull(source.serviceStatusFK),
     serviceStatus: statusById.get(String(source.serviceStatusFK)) || '',
+    warehouseId,
+    warehouse,
+    readyForHydro,
     status: first(source, ['status']),
     partType: text(source, ['partType']),
     categoryId: numberOrNull(source.categoryId),
