@@ -926,7 +926,7 @@ async function fetchDueForHydroXml(url, cookieHeader) {
       headers: {
         'Accept': 'text/xml,application/xml,text/plain,*/*',
         ...(cookieHeader ? { 'Cookie': cookieHeader } : {}),
-        'User-Agent': 'WTFD-SCBA-Lifecycle/16.6'
+        'User-Agent': 'WTFD-SCBA-Lifecycle/16.7'
       },
       redirect: 'manual'
     });
@@ -958,79 +958,194 @@ async function establishOperativeWebSession(env) {
     return { success: false, authState: 'AUTO_LOGIN_NOT_CONFIGURED', error: 'Automatic login requires encrypted secrets OPERATIVE_WEB_LOGIN_ID and OPERATIVE_WEB_PASSWORD.' };
   }
 
-  const loginUrl = `${OPERATIVE_LOGIN_ROOT}/Login.aspx?LoginType=&ReturnUrl=&check=IE&identifier=${encodeURIComponent(identifier)}`;
-  let cookieJar = new Map();
+  const userAgent = 'WTFD-SCBA-Lifecycle/16.7';
+  const loginPageUrl = `${OPERATIVE_LOGIN_ROOT}/Login.aspx?LoginType=&ReturnUrl=&check=IE&identifier=${encodeURIComponent(identifier)}`;
+  const loginJar = new Map();
+  const tenantJar = new Map();
+
   let page;
   try {
-    page = await fetch(loginUrl, { method: 'GET', headers: { 'Accept': 'text/html,*/*', 'User-Agent': 'WTFD-SCBA-Lifecycle/16.6' }, redirect: 'manual' });
+    page = await fetch(loginPageUrl, {
+      method: 'GET',
+      headers: { 'Accept': 'text/html,application/xhtml+xml,*/*', 'User-Agent': userAgent },
+      redirect: 'manual'
+    });
   } catch (error) {
     return { success: false, authState: 'LOGIN_FETCH_ERROR', error: `Unable to reach OperativeIQ login: ${errorMessage(error)}` };
   }
-  absorbCookies(cookieJar, page);
+  absorbCookies(loginJar, page);
   let html = await page.text();
 
-  // Follow a single login-service redirect if the identifier entry point redirects.
   if (page.status >= 300 && page.status < 400 && page.headers.get('location')) {
-    const nextUrl = new URL(page.headers.get('location'), loginUrl).toString();
-    page = await fetch(nextUrl, { method: 'GET', headers: { 'Accept': 'text/html,*/*', 'Cookie': cookieMapHeader(cookieJar), 'User-Agent': 'WTFD-SCBA-Lifecycle/16.6' }, redirect: 'manual' });
-    absorbCookies(cookieJar, page);
+    const nextUrl = new URL(page.headers.get('location'), loginPageUrl).toString();
+    page = await fetch(nextUrl, {
+      method: 'GET',
+      headers: { 'Accept': 'text/html,application/xhtml+xml,*/*', 'Cookie': cookieMapHeader(loginJar), 'User-Agent': userAgent },
+      redirect: 'manual'
+    });
+    absorbCookies(loginJar, page);
     html = await page.text();
   }
 
-  const form = parseLoginForm(html, page.url || loginUrl);
-  if (!form) {
-    return { success: false, authState: 'LOGIN_FORM_NOT_FOUND', error: 'OperativeIQ login page loaded, but the traditional login form could not be identified.' };
+  const webForm = parseOperativeLoginWebForm(html);
+  if (!webForm) {
+    return { success: false, authState: 'LOGIN_FORM_NOT_FOUND', error: 'OperativeIQ login page loaded, but required WebForms login fields were not found.' };
   }
 
-  const params = new URLSearchParams();
-  for (const [name, value] of Object.entries(form.hidden)) params.set(name, value);
-  params.set(form.identifierField, identifier);
-  params.set(form.loginField, loginId);
-  params.set(form.passwordField, password);
-  if (form.submitField) params.set(form.submitField.name, form.submitField.value || 'Login');
+  const makeBody = () => {
+    const params = new URLSearchParams();
+    for (const [name, value] of Object.entries(webForm.hidden)) params.set(name, value);
+    params.set('userNameTextBox', loginId);
+    params.set('passwordTextBox', password);
+    if (webForm.tokenHdn != null) params.set('tokenHdn', webForm.tokenHdn);
+    return params.toString();
+  };
 
-  let response;
+  const commonLoginHeaders = () => ({
+    'Accept': 'application/json,text/javascript,*/*;q=0.01',
+    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    'Cookie': cookieMapHeader(loginJar),
+    'Origin': OPERATIVE_LOGIN_ROOT,
+    'Referer': page.url || loginPageUrl,
+    'X-Requested-With': 'XMLHttpRequest',
+    'User-Agent': userAgent
+  });
+
+  // OperativeIQ performs this WebForms XHR first and issues ASP.NET_SessionId.
+  const checkUrl = `${OPERATIVE_LOGIN_ROOT}/Login.aspx?action=checkDefaultApp&LoginType=`;
+  let checkResponse;
   try {
-    response = await fetch(form.action, {
+    checkResponse = await fetch(checkUrl, {
       method: 'POST',
-      headers: {
-        'Accept': 'text/html,application/xhtml+xml,*/*',
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Cookie': cookieMapHeader(cookieJar),
-        'Origin': OPERATIVE_LOGIN_ROOT,
-        'Referer': page.url || loginUrl,
-        'User-Agent': 'WTFD-SCBA-Lifecycle/16.6'
-      },
-      body: params.toString(),
+      headers: commonLoginHeaders(),
+      body: makeBody(),
       redirect: 'manual'
     });
   } catch (error) {
-    return { success: false, authState: 'LOGIN_POST_ERROR', error: `OperativeIQ login request failed: ${errorMessage(error)}` };
+    return { success: false, authState: 'CHECK_DEFAULT_APP_ERROR', error: `OperativeIQ checkDefaultApp request failed: ${errorMessage(error)}` };
   }
-  absorbCookies(cookieJar, response);
+  absorbCookies(loginJar, checkResponse);
+  let checkJson = null;
+  try { checkJson = JSON.parse(await checkResponse.text()); } catch {}
+  if (!checkResponse.ok || (checkJson && String(checkJson.status || '').toLowerCase() !== 'success')) {
+    return { success: false, authState: 'CHECK_DEFAULT_APP_REJECTED', error: `OperativeIQ checkDefaultApp did not succeed (HTTP ${checkResponse.status}).` };
+  }
 
-  // Follow login redirects while carrying the complete cookie jar. Stop once the tenant site is reached.
-  for (let i = 0; i < 6 && response.status >= 300 && response.status < 400 && response.headers.get('location'); i++) {
-    const nextUrl = new URL(response.headers.get('location'), response.url || form.action).toString();
-    response = await fetch(nextUrl, {
-      method: 'GET',
-      headers: { 'Accept': 'text/html,*/*', 'Cookie': cookieMapHeader(cookieJar), 'User-Agent': 'WTFD-SCBA-Lifecycle/16.6' },
+  // The actual credential POST returns a logIdentity GUID and tenant redirect URL.
+  const loginPostUrl = `${OPERATIVE_LOGIN_ROOT}/Login.aspx?action=login&ReturnUrl=&LoginType=`;
+  let loginResponse;
+  try {
+    loginResponse = await fetch(loginPostUrl, {
+      method: 'POST',
+      headers: commonLoginHeaders(),
+      body: makeBody(),
       redirect: 'manual'
     });
-    absorbCookies(cookieJar, response);
+  } catch (error) {
+    return { success: false, authState: 'LOGIN_POST_ERROR', error: `OperativeIQ credential request failed: ${errorMessage(error)}` };
+  }
+  absorbCookies(loginJar, loginResponse);
+  let loginJson;
+  try { loginJson = JSON.parse(await loginResponse.text()); }
+  catch { return { success: false, authState: 'LOGIN_JSON_ERROR', error: 'OperativeIQ credential request did not return the expected JSON login response.' }; }
+
+  if (!loginResponse.ok || String(loginJson.status || '').toLowerCase() !== 'success' || !loginJson.logIdentity) {
+    return { success: false, authState: 'LOGIN_REJECTED', error: 'OperativeIQ did not accept the supplied web login.' };
   }
 
-  const cookieHeader = cookieMapHeader(cookieJar);
-  if (!cookieJar.has('.ASPXAUTH')) {
-    let body = '';
-    try { body = await response.clone().text(); } catch {}
-    const detail = /invalid|incorrect|failed|password|login/i.test(body) ? ' OperativeIQ did not accept the supplied web login.' : '';
-    return { success: false, authState: 'LOGIN_REJECTED', error: `Automatic OperativeIQ login did not issue an .ASPXAUTH session cookie.${detail}` };
+  const logIdentity = String(loginJson.logIdentity).trim();
+  const tenantEntry = String(loginJson.url || loginJson.BackOfficeUrl || '').trim();
+  let tenantOrigin = OPERATIVE_WEB_ROOT;
+  if (tenantEntry) {
+    try { tenantOrigin = new URL(tenantEntry).origin; } catch {}
   }
 
+  // Navigate to the tenant entry URL first. This mirrors the browser redirect and can
+  // establish tenant-scoped ASP.NET session state before the ai_login XHR.
+  if (tenantEntry) {
+    try {
+      let tenantResponse = await fetch(tenantEntry, {
+        method: 'GET',
+        headers: { 'Accept': 'text/html,application/xhtml+xml,*/*', 'User-Agent': userAgent },
+        redirect: 'manual'
+      });
+      absorbCookies(tenantJar, tenantResponse);
+      for (let i = 0; i < 5 && tenantResponse.status >= 300 && tenantResponse.status < 400 && tenantResponse.headers.get('location'); i++) {
+        const nextUrl = new URL(tenantResponse.headers.get('location'), tenantResponse.url || tenantEntry).toString();
+        tenantResponse = await fetch(nextUrl, {
+          method: 'GET',
+          headers: { 'Accept': 'text/html,application/xhtml+xml,*/*', ...(tenantJar.size ? { 'Cookie': cookieMapHeader(tenantJar) } : {}), 'User-Agent': userAgent },
+          redirect: 'manual'
+        });
+        absorbCookies(tenantJar, tenantResponse);
+      }
+    } catch {}
+  }
+
+  // Confirmed browser flow: POST /Security/Login.aspx?action=ai_login&guid=<logIdentity>
+  // with no form payload. This response issues the tenant .ASPXAUTH cookie.
+  const aiLoginUrl = `${tenantOrigin}/Security/Login.aspx?action=ai_login&guid=${encodeURIComponent(logIdentity)}`;
+  let aiResponse;
+  try {
+    aiResponse = await fetch(aiLoginUrl, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json,text/javascript,*/*;q=0.01',
+        ...(tenantJar.size ? { 'Cookie': cookieMapHeader(tenantJar) } : {}),
+        'Origin': tenantOrigin,
+        'Referer': tenantEntry || `${tenantOrigin}/`,
+        'X-Requested-With': 'XMLHttpRequest',
+        'User-Agent': userAgent
+      },
+      redirect: 'manual'
+    });
+  } catch (error) {
+    return { success: false, authState: 'AI_LOGIN_ERROR', error: `OperativeIQ tenant ai_login request failed: ${errorMessage(error)}` };
+  }
+  absorbCookies(tenantJar, aiResponse);
+  let aiJson = null;
+  try { aiJson = JSON.parse(await aiResponse.clone().text()); } catch {}
+  if (!aiResponse.ok || (aiJson && String(aiJson.status || '').toLowerCase() !== 'success')) {
+    return { success: false, authState: 'AI_LOGIN_REJECTED', error: `OperativeIQ tenant ai_login did not succeed (HTTP ${aiResponse.status}).` };
+  }
+
+  // If the tenant session cookie was not created during the entry navigation, touch the
+  // tenant application once with the fresh forms-auth cookie to establish it.
+  if (tenantJar.has('.ASPXAUTH') && !tenantJar.has('ASP.NET_SessionId')) {
+    try {
+      const bootstrapUrl = tenantEntry || `${tenantOrigin}/Default/Default.aspx`;
+      const bootstrap = await fetch(bootstrapUrl, {
+        method: 'GET',
+        headers: { 'Accept': 'text/html,application/xhtml+xml,*/*', 'Cookie': cookieMapHeader(tenantJar), 'User-Agent': userAgent },
+        redirect: 'manual'
+      });
+      absorbCookies(tenantJar, bootstrap);
+    } catch {}
+  }
+
+  if (!tenantJar.has('.ASPXAUTH')) {
+    return { success: false, authState: 'AI_LOGIN_NO_AUTH_COOKIE', error: 'OperativeIQ ai_login succeeded but did not issue the expected .ASPXAUTH tenant cookie.' };
+  }
+
+  const cookieHeader = cookieMapHeader(tenantJar);
   cachedOperativeWebCookies = cookieHeader;
   cachedOperativeWebSessionAt = Date.now();
   return { success: true, authState: 'AUTHENTICATED', cookieHeader };
+}
+
+function parseOperativeLoginWebForm(html) {
+  const inputs = [...String(html || '').matchAll(/<input\b([^>]*)>/gi)].map(m => htmlAttributes(m[1]));
+  const byName = name => inputs.find(i => String(i.name || '').toLowerCase() === name.toLowerCase());
+  const required = ['__VIEWSTATE', '__VIEWSTATEGENERATOR', '__EVENTVALIDATION'];
+  const hidden = {};
+  for (const name of required) {
+    const input = byName(name);
+    if (!input) return null;
+    hidden[name] = input.value || '';
+  }
+  const token = byName('tokenHdn');
+  if (token) hidden.tokenHdn = token.value || '';
+  return { hidden, tokenHdn: token ? (token.value || '') : '' };
 }
 
 function parseLoginForm(html, baseUrl) {
