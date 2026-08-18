@@ -1,7 +1,7 @@
 # WTFD SCBA Cylinder Lifecycle — 
-## Version 16
+## Version 16.2
 
-Version 16 adds a lightweight hydro workflow based on the cylinder's current OperativeIQ warehouse. Cylinders assigned to **Due for Hydro** are automatically labeled **READY FOR HYDRO**, surfaced in an overview KPI, and can be filtered on the Hydrostatic Testing page. Moving the cylinder back to its normal warehouse clears the workflow status automatically; hydro compliance remains a separate status.
+Version 16.2 drives the hydro workflow from **OperativeIQ Supply Room inventory**, not the cylinder asset-location field. A cylinder with positive on-hand inventory in **Due for Hydro** is automatically labeled **READY FOR HYDRO**; transferring it back to **SCBA Warehouse** clears that workflow status. Hydro compliance remains independent. The Worker automatically discovers compatible supply-room inventory resources from OperativeIQ Swagger metadata and includes a read-only diagnostic route for validation.
 
 Version 15
 

@@ -40,6 +40,36 @@ const INVENTORY_CANDIDATES = [
   '/api/equipment'
 ];
 
+
+const SUPPLY_ROOM_INVENTORY_CANDIDATES = [
+  '/api/supply-room-inventory',
+  '/api/supply-room-inventories',
+  '/api/supply-room-parts',
+  '/api/supply-room-part',
+  '/api/supply-room-items',
+  '/api/supply-room-item',
+  '/api/supply-room-inventory-levels',
+  '/api/supply-room-inventory-level',
+  '/api/inventory-levels',
+  '/api/inventory-level',
+  '/api/part-inventory-levels',
+  '/api/part-inventory-level',
+  '/api/parts-supply-rooms',
+  '/api/part-supply-rooms',
+  '/api/part-supply-room',
+  '/api/inventory',
+  '/api/inventories'
+];
+
+const SUPPLY_ROOM_LOOKUP_CANDIDATES = [
+  '/api/supply-rooms',
+  '/api/supply-room',
+  '/api/rooms'
+];
+
+const HYDRO_STAGING_ROOM_NAME = 'Due for Hydro';
+const NORMAL_SCBA_ROOM_NAME = 'SCBA Warehouse';
+
 const MAINTENANCE_CANDIDATES = [
   '/api/asset-maintenance-histories',
   '/api/asset-maintenance-history',
@@ -120,7 +150,7 @@ export default {
         success: true,
         application: 'WTFD SCBA Cylinder Lifecycle',
         phase: 13,
-        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16',
+        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16_2',
         operativeCredentialsConfigured: Boolean(env.OPERATIVE_CLIENT_ID && env.OPERATIVE_CLIENT_SECRET),
         adminTokenConfigured: Boolean(env.SYNC_ADMIN_TOKEN),
         inventoryPathConfigured: Boolean(env.SCBA_INVENTORY_PATH),
@@ -167,6 +197,10 @@ export default {
 
         if (url.pathname === '/api/scba/engine-preview') {
           return json(await scbaEnginePreview(env, url));
+        }
+
+        if (url.pathname === '/api/scba/supply-room-debug') {
+          return json(await supplyRoomDebug(env, url));
         }
 
         if (url.pathname === '/api/scba/raw') {
@@ -230,6 +264,7 @@ export default {
             '/api/scba/live-inventory?assetClassId=ID',
             '/api/scba/maintenance-linkage?assetClassId=ID',
             '/api/scba/engine-preview?assetClassId=ID',
+            '/api/scba/supply-room-debug?serial=OK655448',
             '/api/scba/raw?path=/api/...&limit=25',
             '/api/scba/inventory-preview',
             '/api/scba/testing-preview',
@@ -455,6 +490,11 @@ async function scbaEnginePreview(env, url) {
   }
 
   const assets = inventoryRows.map(item => {
+    const supplyRoomAssignment = supplyRoomAssignmentByItem.get(String(item.itemId)) || null;
+    const effectiveWarehouse = supplyRoomAssignment?.roomName || item.warehouse || '';
+    const readyForHydro = supplyRoomAssignment
+      ? sameRoomName(supplyRoomAssignment.roomName, HYDRO_STAGING_ROOM_NAME)
+      : item.readyForHydro;
     const history = (maintenanceByItem.get(String(item.itemId)) || [])
       .sort((a, b) => String(b.maintenanceDate).localeCompare(String(a.maintenanceDate)));
     return {
@@ -500,7 +540,7 @@ async function scbaEnginePreview(env, url) {
 async function cachedDashboardResponse(request, env, url) {
   const cache = caches.default;
   const forceRefresh = url.searchParams.has('refresh');
-  const cacheKey = new Request(`${url.origin}/api/dashboard/scba-v16-ac41-f37-t32`, { method: 'GET' });
+  const cacheKey = new Request(`${url.origin}/api/dashboard/scba-v16-2-ac41-f37-t32`, { method: 'GET' });
 
   // A user-requested refresh must bypass Cloudflare's edge cache so inventory
   // transfers in OperativeIQ are reflected immediately.
@@ -547,11 +587,12 @@ async function buildDashboardPayload(env, url) {
     throw new Error('SCBA dashboard integrity check failed: asset class 41 returned no cylinders.');
   }
 
-  const [manufacturers, statuses, locations, fixedAssets] = await Promise.all([
+  const [manufacturers, statuses, locations, fixedAssets, supplyRooms] = await Promise.all([
     loadOptionalLookup(token, ['/api/manufacturers', '/api/manufacturer']),
     loadOptionalLookup(token, ['/api/asset-service-statuses', '/api/asset-service-status']),
     loadOptionalLookup(token, ['/api/locations', '/api/location', '/api/rooms', '/api/supply-rooms']),
-    fetchAll('/api/fixed-assets', token, MAX_RECORDS)
+    fetchAll('/api/fixed-assets', token, MAX_RECORDS),
+    loadSupplyRooms(token)
   ]);
 
   const manufacturerById = lookupNameMap(manufacturers.rows, ['manufacturerName', 'name', 'companyName']);
@@ -560,6 +601,8 @@ async function buildDashboardPayload(env, url) {
   const inventoryRows = scbaItems.map(item =>
     normalizeLiveItem(item, context.assetClassName, manufacturerById, statusById, locationById)
   );
+  const supplyRoomInventory = await loadSupplyRoomInventory(token, supplyRooms.rows, inventoryRows);
+  const supplyRoomAssignmentByItem = buildSupplyRoomAssignmentMap(supplyRoomInventory.rows, supplyRooms.rows, inventoryRows, supplyRoomInventory.forcedRoomName || '');
 
   const scbaItemIds = new Set(scbaItems.map(item => String(item.id)));
   const itemById = new Map(scbaItems.map(item => [String(item.id), item]));
@@ -577,6 +620,11 @@ async function buildDashboardPayload(env, url) {
   }
 
   const assets = inventoryRows.map(item => {
+    const supplyRoomAssignment = supplyRoomAssignmentByItem.get(String(item.itemId)) || null;
+    const effectiveWarehouse = supplyRoomAssignment?.roomName || item.warehouse || '';
+    const readyForHydro = supplyRoomAssignment
+      ? sameRoomName(supplyRoomAssignment.roomName, HYDRO_STAGING_ROOM_NAME)
+      : item.readyForHydro;
     const history = (maintenanceByItem.get(String(item.itemId)) || [])
       .sort((a, b) => String(b.maintenanceDate).localeCompare(String(a.maintenanceDate)))
       .map(row => ({
@@ -612,9 +660,10 @@ async function buildDashboardPayload(env, url) {
       decommissionDate: item.decommissionDate,
       estimatedReplacementCost: item.estimatedReplacementCost,
       serviceStatus: item.serviceStatus,
-      warehouse: item.warehouse,
-      warehouseId: item.warehouseId,
-      readyForHydro: item.readyForHydro,
+      warehouse: effectiveWarehouse,
+      warehouseId: supplyRoomAssignment?.roomId ?? item.warehouseId,
+      readyForHydro,
+      supplyRoomSource: supplyRoomAssignment ? 'OperativeIQ supply-room inventory' : (item.warehouse ? 'OperativeIQ item record' : ''),
       active: item.status === true,
       latestTestDate: history[0]?.maintenanceDate || '',
       testHistory: history
@@ -629,7 +678,7 @@ async function buildDashboardPayload(env, url) {
 
   return {
     success: true,
-    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16',
+    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16_2',
     generatedAt: new Date().toISOString(),
     refreshMinutes: 15,
     module: 'SCBA_CYLINDER',
@@ -645,7 +694,8 @@ async function buildDashboardPayload(env, url) {
       maintenanceRecords: linkedMaintenance.length,
       assetsWithHistory: activeAssets.filter(row => row.testHistory.length > 0).length,
       assetsWithoutHistory: activeAssets.filter(row => row.testHistory.length === 0).length,
-      estimatedActiveReplacementValue: Math.round(currentCost * 100) / 100
+      estimatedActiveReplacementValue: Math.round(currentCost * 100) / 100,
+      readyForHydro: activeAssets.filter(row => row.readyForHydro).length
     },
     dataQuality: {
       missingManufacturer: activeAssets.filter(row => !row.manufacturer).length,
@@ -670,12 +720,20 @@ async function buildDashboardPayload(env, url) {
       hydroMaintenanceType: 32,
       uniqueCylinderCount: new Set(assets.map(row => String(row.itemId))).size,
       duplicateCylinderIds: assets.length - new Set(assets.map(row => String(row.itemId))).size,
-      passed: Number(context.assetClassId) === 41 && assets.length === new Set(assets.map(row => String(row.itemId))).size
+      passed: Number(context.assetClassId) === 41 && assets.length === new Set(assets.map(row => String(row.itemId))).size,
+      supplyRoomInventoryPath: supplyRoomInventory.path,
+      supplyRoomInventoryDetected: Boolean(supplyRoomInventory.path),
+      hydroStagingRoom: HYDRO_STAGING_ROOM_NAME,
+      normalScbaRoom: NORMAL_SCBA_ROOM_NAME,
+      hydroStagingMatches: activeAssets.filter(row => row.readyForHydro).length
     },
     limitations: [
       'Detailed hydrostatic form answers are not yet resolved from formAnswerUniqueId.',
       'Planned decommission dates use the OperativeIQ SCBA Cylinders Decommission Planning report (203 unique cylinders); the item record is used as a secondary source, and only unmatched cylinders fall back to a clearly labeled 15-year estimate.',
-      'Replacement costs use the current item price stored in OperativeIQ when available and are planning estimates only.'
+      'Replacement costs use the current item price stored in OperativeIQ when available and are planning estimates only.',
+      supplyRoomInventory.path
+        ? `Ready for Hydro is driven by current OperativeIQ supply-room inventory from ${supplyRoomInventory.path}; cylinders in ${HYDRO_STAGING_ROOM_NAME} are staged for testing.`
+        : 'OperativeIQ supply-room inventory could not be resolved automatically; Ready for Hydro falls back to any location available on the item record.'
     ],
     assets
   };
@@ -752,6 +810,244 @@ function normalizeAssetClass(source) {
     description: text(source, ['classDescription', 'description']),
     status: first(source, ['status', 'active']),
     raw: source
+  };
+}
+
+
+async function loadSupplyRooms(token) {
+  let fallback = null;
+  const candidates = unique([
+    ...SUPPLY_ROOM_LOOKUP_CANDIDATES,
+    ...await safeDiscoveredPathsFor(token, /supply|room/i, true)
+  ]);
+
+  for (const path of candidates) {
+    if (/\{/.test(path)) continue;
+    const result = await probePath(path, token);
+    if (result.httpStatus !== 200) continue;
+    try {
+      const rows = await fetchAll(path, token, 10000);
+      if (!rows.length) continue;
+      const names = rows.map(row => text(row, ['supplyRoomName', 'roomName', 'name', 'locationName', 'warehouseName', 'description'])).filter(Boolean);
+      const candidate = { path, rows };
+      if (names.some(name => sameRoomName(name, HYDRO_STAGING_ROOM_NAME)) || names.some(name => sameRoomName(name, NORMAL_SCBA_ROOM_NAME))) return candidate;
+      const signature = `${uniqueFields(rows).join(' ')} ${names.slice(0, 10).join(' ')}`;
+      if (/supply.?room/i.test(signature) && !fallback) fallback = candidate;
+    } catch {}
+  }
+  return fallback || { path: null, rows: [] };
+}
+
+async function loadSupplyRoomInventory(token, supplyRooms, inventoryRows) {
+  const discovered = await safeDiscoveredPathsFor(token, /supply|inventory|stock|part|room/i, true);
+  const dueRoom = findSupplyRoom(supplyRooms, HYDRO_STAGING_ROOM_NAME);
+  const candidates = SUPPLY_ROOM_INVENTORY_CANDIDATES.map(path => ({ path, forcedRoomName: '' }));
+
+  for (const discoveredPath of discovered) {
+    if (!/supply|inventory|stock|part|room/i.test(discoveredPath)) continue;
+    if (/\{/.test(discoveredPath)) {
+      if (!dueRoom?.id) continue;
+      candidates.push({ path: instantiateApiPath(discoveredPath, dueRoom.id), forcedRoomName: HYDRO_STAGING_ROOM_NAME });
+    } else {
+      candidates.push({ path: discoveredPath, forcedRoomName: '' });
+    }
+  }
+
+  let fallback = null;
+  const seen = new Set();
+  for (const candidateInfo of candidates.slice(0, 120)) {
+    const key = `${candidateInfo.path}|${candidateInfo.forcedRoomName}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const result = await probePath(candidateInfo.path, token);
+    if (result.httpStatus !== 200) continue;
+    const score = supplyRoomInventoryProbeScore(result);
+    if (score <= 0 && !candidateInfo.forcedRoomName) continue;
+    try {
+      const rows = await fetchAll(candidateInfo.path, token, MAX_RECORDS);
+      const evaluated = evaluateSupplyRoomRows(rows, supplyRooms, inventoryRows, candidateInfo.forcedRoomName);
+      const candidate = { path: candidateInfo.path, rows, score: score + evaluated.score, evaluated, forcedRoomName: candidateInfo.forcedRoomName };
+      if (evaluated.hydroMatches > 0) return candidate;
+      if (!fallback || candidate.score > fallback.score) fallback = candidate;
+    } catch {}
+  }
+  return fallback || { path: null, rows: [], score: 0, forcedRoomName: '', evaluated: { hydroMatches: 0, matchedItems: 0, score: 0 } };
+}
+
+function supplyRoomInventoryProbeScore(result) {
+  const textValue = `${result.path} ${result.detectedFields.join(' ')} ${JSON.stringify(result.sampleRows)}`.toLowerCase();
+  let score = 0;
+  if (/supply.?room/.test(textValue)) score += 8;
+  if (/inventory|on.?hand|stock/.test(textValue)) score += 6;
+  if (/serial|part.?number|item.?number|upc|asset/.test(textValue)) score += 5;
+  if (/room.?id|supply.?room.?id|location.?id/.test(textValue)) score += 4;
+  if (/part|item/.test(textValue)) score += 2;
+  return score;
+}
+
+function evaluateSupplyRoomRows(rows, supplyRooms, inventoryRows, forcedRoomName = '') {
+  const assignments = buildSupplyRoomAssignmentMap(rows, supplyRooms, inventoryRows, forcedRoomName);
+  const values = [...assignments.values()];
+  const hydroMatches = values.filter(row => sameRoomName(row.roomName, HYDRO_STAGING_ROOM_NAME)).length;
+  return {
+    matchedItems: assignments.size,
+    hydroMatches,
+    score: assignments.size + hydroMatches * 100
+  };
+}
+
+function buildSupplyRoomAssignmentMap(rows, supplyRooms, inventoryRows, forcedRoomName = '') {
+  const roomNameById = lookupNameMap(supplyRooms, ['supplyRoomName', 'roomName', 'name', 'locationName', 'description']);
+  const itemByExactIdentifier = new Map();
+  const itemById = new Map();
+
+  for (const item of inventoryRows) {
+    itemById.set(String(item.itemId), item);
+    for (const value of [item.serialNumber, item.itemNumber, item.partUpc, item.assetTag, item.assetDescription]) {
+      const key = exactInventoryKey(value);
+      if (key) itemByExactIdentifier.set(key, item);
+    }
+  }
+
+  const assignments = new Map();
+  for (const raw of rows || []) {
+    const row = normalizeSupplyRoomInventoryRow(raw, roomNameById, forcedRoomName);
+    if (!rowIsOnHand(row)) continue;
+
+    let item = null;
+    for (const idValue of row.itemIds) {
+      if (idValue !== null && idValue !== undefined && itemById.has(String(idValue))) {
+        item = itemById.get(String(idValue));
+        break;
+      }
+    }
+    if (!item) {
+      for (const value of row.identifiers) {
+        const key = exactInventoryKey(value);
+        if (key && itemByExactIdentifier.has(key)) {
+          item = itemByExactIdentifier.get(key);
+          break;
+        }
+      }
+    }
+    if (!item || !row.roomName) continue;
+
+    const candidate = {
+      itemId: item.itemId,
+      roomId: row.roomId,
+      roomName: row.roomName,
+      onHand: row.onHand,
+      identifiers: row.identifiers
+    };
+
+    // A positive on-hand record in Due for Hydro always wins over normal inventory.
+    const existing = assignments.get(String(item.itemId));
+    if (!existing || sameRoomName(candidate.roomName, HYDRO_STAGING_ROOM_NAME) || !sameRoomName(existing.roomName, HYDRO_STAGING_ROOM_NAME)) {
+      assignments.set(String(item.itemId), candidate);
+    }
+  }
+  return assignments;
+}
+
+function normalizeSupplyRoomInventoryRow(source, roomNameById = new Map(), forcedRoomName = '') {
+  const roomObject = first(source, ['supplyRoom', 'room', 'location', 'warehouse', 'supplyRoomLocation']);
+  const directRoomId = first(source, ['supplyRoomId', 'supplyRoomID', 'supplyRoomFK', 'roomId', 'roomID', 'roomFK', 'locationId', 'locationFK', 'warehouseId', 'warehouseFK']);
+  const nestedRoomId = roomObject && typeof roomObject === 'object'
+    ? first(roomObject, ['id', 'supplyRoomId', 'roomId', 'locationId', 'warehouseId'])
+    : null;
+  const roomId = directRoomId ?? nestedRoomId ?? null;
+  const directRoomName = text(source, ['supplyRoomName', 'roomName', 'locationName', 'warehouseName', 'supplyRoomDescription']);
+  const nestedRoomName = roomObject && typeof roomObject === 'object'
+    ? text(roomObject, ['supplyRoomName', 'roomName', 'name', 'locationName', 'warehouseName', 'description'])
+    : (typeof roomObject === 'string' ? roomObject.trim() : '');
+  const roomName = directRoomName || nestedRoomName || (roomId !== null ? (roomNameById.get(String(roomId)) || '') : '') || forcedRoomName;
+
+  const partObject = first(source, ['part', 'item', 'asset', 'fixedAsset', 'inventoryItem']);
+  const identifiers = unique([
+    text(source, ['serialNumber', 'serialNo', 'partSerialNumber', 'partNumber', 'itemNumber', 'partUpc', 'partUPC', 'upc', 'assetNumber', 'assetTag', 'partDescription', 'itemName', 'description']),
+    partObject && typeof partObject === 'object' ? text(partObject, ['serialNumber', 'serialNo', 'partSerialNumber', 'partNumber', 'itemNumber', 'partUpc', 'partUPC', 'upc', 'assetNumber', 'assetTag', 'itemName', 'partDescription', 'description']) : ''
+  ].filter(Boolean));
+
+  const itemIds = unique([
+    first(source, ['itemId', 'itemID', 'fixedAssetId', 'assetId', 'inventoryItemId', 'partId', 'partID']),
+    partObject && typeof partObject === 'object' ? first(partObject, ['id', 'itemId', 'fixedAssetId', 'assetId', 'partId']) : null
+  ].filter(value => value !== null && value !== undefined && value !== ''));
+
+  const onHandRaw = first(source, ['onHand', 'onHandQuantity', 'quantityOnHand', 'qtyOnHand', 'currentQuantity', 'quantity', 'stockQuantity', 'inventoryLevel']);
+  const onHand = onHandRaw === null || onHandRaw === undefined || onHandRaw === '' ? null : Number(onHandRaw);
+
+  return { roomId, roomName, identifiers, itemIds, onHand, raw: source };
+}
+
+function rowIsOnHand(row) {
+  return row.onHand === null || !Number.isFinite(row.onHand) || row.onHand > 0;
+}
+
+function exactInventoryKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function sameRoomName(a, b) {
+  return exactInventoryKey(a) === exactInventoryKey(b);
+}
+
+async function safeDiscoveredPathsFor(token, pattern, includeParameterized = false) {
+  try {
+    const specification = await fetchSwagger(token);
+    return Object.entries(specification.paths || {})
+      .filter(([path, operations]) => (includeParameterized || !/\{/.test(path)) && operations && operations.get && pattern.test(`${path} ${operationText(operations)}`))
+      .map(([path]) => path);
+  } catch {
+    return [];
+  }
+}
+
+function findSupplyRoom(rows, wantedName) {
+  for (const row of rows || []) {
+    const name = text(row, ['supplyRoomName', 'roomName', 'name', 'locationName', 'warehouseName', 'description']);
+    if (!sameRoomName(name, wantedName)) continue;
+    return {
+      id: first(row, ['id', 'supplyRoomId', 'roomId', 'locationId', 'warehouseId']),
+      name
+    };
+  }
+  return null;
+}
+
+function instantiateApiPath(path, id) {
+  return String(path).replace(/\{[^}]+\}/g, encodeURIComponent(String(id)));
+}
+
+async function supplyRoomDebug(env, url) {
+  const token = await getAccessToken(env);
+  const context = await resolveCylinderContext(env, url, token);
+  const scbaItems = context.items.filter(item => String(item.assetClassId ?? '') === '41');
+  const manufacturers = await loadOptionalLookup(token, ['/api/manufacturers', '/api/manufacturer']);
+  const statuses = await loadOptionalLookup(token, ['/api/asset-service-statuses', '/api/asset-service-status']);
+  const manufacturerById = lookupNameMap(manufacturers.rows, ['manufacturerName', 'name', 'companyName']);
+  const statusById = lookupNameMap(statuses.rows, ['name', 'statusName', 'description']);
+  const inventoryRows = scbaItems.map(item => normalizeLiveItem(item, context.assetClassName, manufacturerById, statusById));
+  const supplyRooms = await loadSupplyRooms(token);
+  const source = await loadSupplyRoomInventory(token, supplyRooms.rows, inventoryRows);
+  const assignments = buildSupplyRoomAssignmentMap(source.rows, supplyRooms.rows, inventoryRows, source.forcedRoomName || '');
+  const serial = String(url.searchParams.get('serial') || 'OK655448').trim();
+  const target = inventoryRows.find(item => [item.serialNumber, item.itemNumber, item.partUpc, item.assetTag].some(value => exactInventoryKey(value) === exactInventoryKey(serial))) || null;
+  const assignment = target ? assignments.get(String(target.itemId)) || null : null;
+
+  return {
+    success: true,
+    mode: 'READ_ONLY_SUPPLY_ROOM_DEBUG_V16_2',
+    supplyRoomLookupPath: supplyRooms.path,
+    supplyRoomInventoryPath: source.path,
+    supplyRoomCount: supplyRooms.rows.length,
+    sourceRowCount: source.rows.length,
+    sourceDetectedFields: uniqueFields(source.rows),
+    matchedCylinderCount: assignments.size,
+    hydroStagingCount: [...assignments.values()].filter(row => sameRoomName(row.roomName, HYDRO_STAGING_ROOM_NAME)).length,
+    target: target ? { itemId: target.itemId, assetTag: target.assetTag, serialNumber: target.serialNumber, partUpc: target.partUpc, description: target.assetDescription } : null,
+    targetAssignment: assignment,
+    knownWorkflow: { normal: NORMAL_SCBA_ROOM_NAME, readyForHydro: HYDRO_STAGING_ROOM_NAME },
+    note: 'Read-only diagnostic. No OperativeIQ records were changed.'
   };
 }
 
@@ -878,7 +1174,7 @@ function scbaClassScore(row) {
 function lookupNameMap(rows, nameFields) {
   const map = new Map();
   for (const row of rows) {
-    const id = first(row, ['id', 'manufacturerId', 'statusId']);
+    const id = first(row, ['id', 'manufacturerId', 'statusId', 'supplyRoomId', 'roomId', 'locationId', 'warehouseId']);
     if (id === null) continue;
     map.set(String(id), text(row, nameFields));
   }
@@ -1055,7 +1351,7 @@ async function selectTestingPath(token) {
 async function safeDiscoveredPaths(token) {
   try {
     const specification = await fetchSwagger(token);
-    return Object.keys(specification.paths || {}).filter(path => /scba|maintenance|asset|equipment|inspection|test|service/i.test(path));
+    return Object.keys(specification.paths || {}).filter(path => /scba|maintenance|asset|equipment|inspection|test|service|supply|inventory|stock|room|part/i.test(path));
   } catch {
     return [];
   }
