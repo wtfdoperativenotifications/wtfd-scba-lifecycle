@@ -153,9 +153,9 @@ export default {
         success: true,
         application: 'WTFD SCBA Cylinder Lifecycle',
         phase: 13,
-        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16_3',
+        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16_4',
         operativeCredentialsConfigured: Boolean(env.OPERATIVE_CLIENT_ID && env.OPERATIVE_CLIENT_SECRET),
-        operativeWebSessionConfigured: Boolean(env.OPERATIVE_WEB_ASPXAUTH),
+        operativeWebSessionConfigured: Boolean(env.OPERATIVE_WEB_ASPXAUTH && env.OPERATIVE_WEB_SESSIONID),
         adminTokenConfigured: Boolean(env.SYNC_ADMIN_TOKEN),
         inventoryPathConfigured: Boolean(env.SCBA_INVENTORY_PATH),
         testingPathConfigured: Boolean(env.SCBA_TESTING_PATH),
@@ -544,7 +544,7 @@ async function scbaEnginePreview(env, url) {
 async function cachedDashboardResponse(request, env, url) {
   const cache = caches.default;
   const forceRefresh = url.searchParams.has('refresh');
-  const cacheKey = new Request(`${url.origin}/api/dashboard/scba-v16-3-ac41-f37-t32`, { method: 'GET' });
+  const cacheKey = new Request(`${url.origin}/api/dashboard/scba-v16-4-ac41-f37-t32`, { method: 'GET' });
 
   // A user-requested refresh must bypass Cloudflare's edge cache so inventory
   // transfers in OperativeIQ are reflected immediately.
@@ -687,7 +687,7 @@ async function buildDashboardPayload(env, url) {
 
   return {
     success: true,
-    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16_3',
+    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16_4',
     generatedAt: new Date().toISOString(),
     refreshMinutes: 15,
     module: 'SCBA_CYLINDER',
@@ -853,15 +853,20 @@ async function loadSupplyRooms(token) {
 async function loadDueForHydroWebInventory(env) {
   const path = HYDRO_STAGING_XML_PATH;
   const url = `${OPERATIVE_WEB_ROOT}${path}`;
-  const configuredCookie = normalizeAspxAuthCookie(env.OPERATIVE_WEB_ASPXAUTH || '');
+  const aspxAuthCookie = normalizeAspxAuthCookie(env.OPERATIVE_WEB_ASPXAUTH || '');
+  const sessionIdCookie = normalizeAspNetSessionCookie(env.OPERATIVE_WEB_SESSIONID || '');
+  const configuredCookie = [aspxAuthCookie, sessionIdCookie].filter(Boolean).join('; ');
 
-  if (!configuredCookie) {
+  if (!aspxAuthCookie || !sessionIdCookie) {
+    const missing = [];
+    if (!aspxAuthCookie) missing.push('OPERATIVE_WEB_ASPXAUTH');
+    if (!sessionIdCookie) missing.push('OPERATIVE_WEB_SESSIONID');
     return {
       success: false,
       path,
       rows: [],
       authState: 'NOT_CONFIGURED',
-      error: 'OPERATIVE_WEB_ASPXAUTH is not configured as a Cloudflare Worker secret.'
+      error: `${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not configured as a Cloudflare Worker secret.`
     };
   }
 
@@ -872,7 +877,7 @@ async function loadDueForHydroWebInventory(env) {
       headers: {
         'Accept': 'text/xml,application/xml,text/plain,*/*',
         'Cookie': configuredCookie,
-        'User-Agent': 'WTFD-SCBA-Lifecycle/16.3'
+        'User-Agent': 'WTFD-SCBA-Lifecycle/16.4'
       },
       redirect: 'manual'
     });
@@ -887,7 +892,7 @@ async function loadDueForHydroWebInventory(env) {
       path,
       rows: [],
       authState: 'SESSION_EXPIRED',
-      error: `OperativeIQ redirected the room feed to ${location || 'a login page'}; refresh the OPERATIVE_WEB_ASPXAUTH Worker secret.`
+      error: `OperativeIQ redirected the room feed to ${location || 'a login page'} even with .ASPXAUTH and ASP.NET_SessionId. Refresh both OPERATIVE_WEB_ASPXAUTH and OPERATIVE_WEB_SESSIONID. If the redirect continues, AppInstanceId will be the next session cookie to test.`
     };
   }
 
@@ -902,7 +907,7 @@ async function loadDueForHydroWebInventory(env) {
       path,
       rows: [],
       authState: 'SESSION_EXPIRED',
-      error: 'OperativeIQ returned the login page instead of supply-room XML; refresh the OPERATIVE_WEB_ASPXAUTH Worker secret.'
+      error: 'OperativeIQ returned the login page even with .ASPXAUTH and ASP.NET_SessionId. Refresh both OPERATIVE_WEB_ASPXAUTH and OPERATIVE_WEB_SESSIONID. If the login page continues, AppInstanceId will be the next session cookie to test.'
     };
   }
 
@@ -934,6 +939,14 @@ function normalizeAspxAuthCookie(value) {
   if (!raw) return '';
   if (/^\.ASPXAUTH=/i.test(raw)) return raw.split(';')[0];
   return `.ASPXAUTH=${raw}`;
+}
+
+
+function normalizeAspNetSessionCookie(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^ASP\.NET_SessionId=/i.test(raw)) return raw.split(';')[0];
+  return `ASP.NET_SessionId=${raw}`;
 }
 
 function parseSupplyRoomXml(xml) {
@@ -1157,7 +1170,7 @@ async function supplyRoomDebug(env, url) {
 
   return {
     success: true,
-    mode: 'READ_ONLY_SUPPLY_ROOM_DEBUG_V16_3',
+    mode: 'READ_ONLY_SUPPLY_ROOM_DEBUG_V16_4',
     supplyRoomLookupPath: supplyRooms.path,
     supplyRoomInventoryPath: source.path,
     supplyRoomCount: supplyRooms.rows.length,
