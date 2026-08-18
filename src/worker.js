@@ -499,17 +499,38 @@ async function scbaEnginePreview(env, url) {
 
 async function cachedDashboardResponse(request, env, url) {
   const cache = caches.default;
-  const cacheKey = new Request(`${url.origin}/api/dashboard/scba-v13-ac41-f37-t32`, { method: 'GET' });
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+  const forceRefresh = url.searchParams.has('refresh');
+  const cacheKey = new Request(`${url.origin}/api/dashboard/scba-v16-ac41-f37-t32`, { method: 'GET' });
+
+  // A user-requested refresh must bypass Cloudflare's edge cache so inventory
+  // transfers in OperativeIQ are reflected immediately.
+  if (!forceRefresh) {
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+  }
 
   const payload = await buildDashboardPayload(env, url);
   const response = json(payload, 200, {
-    'Cache-Control': 'public, max-age=300, s-maxage=900',
+    // Keep routine loads inexpensive, but do not allow inventory state to look
+    // stale for long periods. Manual refresh always bypasses this cache.
+    'Cache-Control': forceRefresh
+      ? 'no-store, max-age=0'
+      : 'public, max-age=30, s-maxage=60',
     'Access-Control-Allow-Origin': '*'
   });
-  const cacheCopy = response.clone();
-  await cache.put(cacheKey, cacheCopy);
+
+  if (!forceRefresh) {
+    await cache.put(cacheKey, response.clone());
+  } else {
+    // Replace any older cached dashboard with the freshly fetched payload so
+    // subsequent viewers immediately see the same current inventory state.
+    const cachedResponse = json(payload, 200, {
+      'Cache-Control': 'public, max-age=30, s-maxage=60',
+      'Access-Control-Allow-Origin': '*'
+    });
+    await cache.put(cacheKey, cachedResponse.clone());
+  }
+
   return response;
 }
 
