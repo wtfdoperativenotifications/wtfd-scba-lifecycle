@@ -64,3 +64,7 @@ Version 15 adds official department branding and interactive overview KPI cards 
 ## Version 15 planned decommission integration
 
 Version 15 joins the OperativeIQ `SCBA Cylinders Decommission Planning` report to live SCBA inventory using Part UPC / Part Description. The report contains 283 maintenance/report rows but 203 unique cylinders; each cylinder is counted once. Planned dates are authoritative for the 203 matched active cylinders. Unmatched cylinders continue to use the clearly labeled planning-age estimate.
+
+
+## OperativeIQ automatic web login (v16.6)
+Configure `OPERATIVE_WEB_LOGIN_ID` and `OPERATIVE_WEB_PASSWORD` as encrypted Cloudflare Worker secrets. The Worker uses the traditional OperativeIQ login page, defaults the client identifier to `wtfd`, establishes its own authenticated session, and automatically renews that session when required. `OPERATIVE_WEB_IDENTIFIER` is optional. Do not commit login credentials or session cookies to GitHub.

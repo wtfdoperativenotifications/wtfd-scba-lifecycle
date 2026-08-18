@@ -1,6 +1,8 @@
 const AUTH_URL = 'https://auth.operativeiqfrontline.com/FrontlineV_live/token';
 const RESOURCE_ROOT = 'https://client.operativeiqfrontline.com/FrontlineV_live';
 const OPERATIVE_WEB_ROOT = 'https://wtfd.operativeiq.com';
+const OPERATIVE_LOGIN_ROOT = 'https://login.operativeiq.com';
+const OPERATIVE_WEB_IDENTIFIER_DEFAULT = 'wtfd';
 const HYDRO_STAGING_ROOM_ID = '39';
 const HYDRO_STAGING_XML_PATH = `/rooms/SupplyRoomPartListXml.ashx?id=${HYDRO_STAGING_ROOM_ID}`;
 const PAGE_SIZE = 200;
@@ -143,6 +145,8 @@ const PROBE_GROUPS = Object.freeze({
 
 let cachedToken = null;
 let cachedTokenExpiresAt = 0;
+let cachedOperativeWebCookies = '';
+let cachedOperativeWebSessionAt = 0;
 
 export default {
   async fetch(request, env) {
@@ -153,9 +157,10 @@ export default {
         success: true,
         application: 'WTFD SCBA Cylinder Lifecycle',
         phase: 13,
-        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16_4',
+        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16_6',
         operativeCredentialsConfigured: Boolean(env.OPERATIVE_CLIENT_ID && env.OPERATIVE_CLIENT_SECRET),
-        operativeWebSessionConfigured: Boolean(env.OPERATIVE_WEB_ASPXAUTH && env.OPERATIVE_WEB_SESSIONID),
+        operativeWebSessionConfigured: Boolean((env.OPERATIVE_WEB_LOGIN_ID && env.OPERATIVE_WEB_PASSWORD) || (env.OPERATIVE_WEB_ASPXAUTH && env.OPERATIVE_WEB_SESSIONID)),
+        operativeWebAutoLoginConfigured: Boolean(env.OPERATIVE_WEB_LOGIN_ID && env.OPERATIVE_WEB_PASSWORD),
         adminTokenConfigured: Boolean(env.SYNC_ADMIN_TOKEN),
         inventoryPathConfigured: Boolean(env.SCBA_INVENTORY_PATH),
         testingPathConfigured: Boolean(env.SCBA_TESTING_PATH),
@@ -687,7 +692,7 @@ async function buildDashboardPayload(env, url) {
 
   return {
     success: true,
-    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16_4',
+    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16_6',
     generatedAt: new Date().toISOString(),
     refreshMinutes: 15,
     module: 'SCBA_CYLINDER',
@@ -853,85 +858,256 @@ async function loadSupplyRooms(token) {
 async function loadDueForHydroWebInventory(env) {
   const path = HYDRO_STAGING_XML_PATH;
   const url = `${OPERATIVE_WEB_ROOT}${path}`;
-  const aspxAuthCookie = normalizeAspxAuthCookie(env.OPERATIVE_WEB_ASPXAUTH || '');
-  const sessionIdCookie = normalizeAspNetSessionCookie(env.OPERATIVE_WEB_SESSIONID || '');
-  const configuredCookie = [aspxAuthCookie, sessionIdCookie].filter(Boolean).join('; ');
 
-  if (!aspxAuthCookie || !sessionIdCookie) {
-    const missing = [];
-    if (!aspxAuthCookie) missing.push('OPERATIVE_WEB_ASPXAUTH');
-    if (!sessionIdCookie) missing.push('OPERATIVE_WEB_SESSIONID');
+  let cookieHeader = cachedOperativeWebCookies || configuredOperativeWebCookies(env);
+  let authSource = cachedOperativeWebCookies ? 'AUTO_LOGIN_CACHE' : (cookieHeader ? 'CONFIGURED_COOKIE_FALLBACK' : 'NONE');
+
+  if (!cookieHeader && !(env.OPERATIVE_WEB_LOGIN_ID && env.OPERATIVE_WEB_PASSWORD)) {
     return {
       success: false,
       path,
       rows: [],
       authState: 'NOT_CONFIGURED',
-      error: `${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not configured as a Cloudflare Worker secret.`
+      error: 'Configure OPERATIVE_WEB_LOGIN_ID and OPERATIVE_WEB_PASSWORD as encrypted Cloudflare Worker secrets for automatic OperativeIQ web login.'
     };
   }
 
+  let attempt = await fetchDueForHydroXml(url, cookieHeader);
+  if (attempt.needsLogin) {
+    const login = await establishOperativeWebSession(env);
+    if (!login.success) {
+      return { success: false, path, rows: [], authState: login.authState || 'LOGIN_FAILED', error: login.error };
+    }
+    cookieHeader = login.cookieHeader;
+    authSource = 'AUTO_LOGIN';
+    attempt = await fetchDueForHydroXml(url, cookieHeader);
+  }
+
+  if (attempt.needsLogin) {
+    cachedOperativeWebCookies = '';
+    cachedOperativeWebSessionAt = 0;
+    return {
+      success: false,
+      path,
+      rows: [],
+      authState: 'LOGIN_REDIRECT',
+      error: `Automatic OperativeIQ login completed, but room ${HYDRO_STAGING_ROOM_ID} still redirected to the login service. Verify the OPERATIVE_WEB_LOGIN_ID and OPERATIVE_WEB_PASSWORD secrets and that the account can access Supply Rooms.`
+    };
+  }
+  if (!attempt.response.ok) {
+    return { success: false, path, rows: [], authState: `HTTP_${attempt.response.status}`, error: `OperativeIQ room feed returned HTTP ${attempt.response.status}.` };
+  }
+
+  mergeResponseCookiesIntoCache(attempt.response);
+  const body = attempt.body;
+  if (!/<rows\b/i.test(body)) {
+    return { success: false, path, rows: [], authState: 'UNEXPECTED_RESPONSE', error: 'OperativeIQ did not return the expected <rows> supply-room XML.' };
+  }
+
+  const rows = parseSupplyRoomXml(body).filter(row => String(row.RoomId || row.roomId || '') === HYDRO_STAGING_ROOM_ID);
+  return {
+    success: true,
+    path,
+    rows,
+    authState: 'AUTHENTICATED',
+    authSource,
+    roomId: HYDRO_STAGING_ROOM_ID,
+    roomName: HYDRO_STAGING_ROOM_NAME,
+    rowCount: rows.length,
+    sessionAgeSeconds: cachedOperativeWebSessionAt ? Math.round((Date.now() - cachedOperativeWebSessionAt) / 1000) : null
+  };
+}
+
+async function fetchDueForHydroXml(url, cookieHeader) {
   let response;
   try {
     response = await fetch(url, {
       method: 'GET',
       headers: {
         'Accept': 'text/xml,application/xml,text/plain,*/*',
-        'Cookie': configuredCookie,
-        'User-Agent': 'WTFD-SCBA-Lifecycle/16.4'
+        ...(cookieHeader ? { 'Cookie': cookieHeader } : {}),
+        'User-Agent': 'WTFD-SCBA-Lifecycle/16.6'
       },
       redirect: 'manual'
     });
   } catch (error) {
-    return { success: false, path, rows: [], authState: 'FETCH_ERROR', error: errorMessage(error) };
+    return { response: { ok: false, status: 0 }, body: '', needsLogin: false, error: errorMessage(error) };
   }
-
   const location = response.headers.get('location') || '';
-  if (response.status >= 300 && response.status < 400) {
-    return {
-      success: false,
-      path,
-      rows: [],
-      authState: 'SESSION_EXPIRED',
-      error: `OperativeIQ redirected the room feed to ${location || 'a login page'} even with .ASPXAUTH and ASP.NET_SessionId. Refresh both OPERATIVE_WEB_ASPXAUTH and OPERATIVE_WEB_SESSIONID. If the redirect continues, AppInstanceId will be the next session cookie to test.`
-    };
+  if (response.status >= 300 && response.status < 400 && /login\.operativeiq\.com|loginidentifier\.aspx|login\.aspx/i.test(location)) {
+    return { response, body: '', needsLogin: true, location };
   }
-
   const body = await response.text();
-  if (!response.ok) {
-    return { success: false, path, rows: [], authState: `HTTP_${response.status}`, error: `OperativeIQ room feed returned HTTP ${response.status}.` };
+  const needsLogin = /login\.aspx|name=["']?password|action=["']?ai_login/i.test(body) && !/<rows\b/i.test(body);
+  return { response, body, needsLogin, location };
+}
+
+function configuredOperativeWebCookies(env) {
+  const cookies = [
+    normalizeAspxAuthCookie(env.OPERATIVE_WEB_ASPXAUTH || ''),
+    normalizeAspNetSessionCookie(env.OPERATIVE_WEB_SESSIONID || '')
+  ].filter(Boolean);
+  return cookies.join('; ');
+}
+
+async function establishOperativeWebSession(env) {
+  const loginId = String(env.OPERATIVE_WEB_LOGIN_ID || '').trim();
+  const password = String(env.OPERATIVE_WEB_PASSWORD || '');
+  const identifier = String(env.OPERATIVE_WEB_IDENTIFIER || OPERATIVE_WEB_IDENTIFIER_DEFAULT).trim() || OPERATIVE_WEB_IDENTIFIER_DEFAULT;
+  if (!loginId || !password) {
+    return { success: false, authState: 'AUTO_LOGIN_NOT_CONFIGURED', error: 'Automatic login requires encrypted secrets OPERATIVE_WEB_LOGIN_ID and OPERATIVE_WEB_PASSWORD.' };
   }
 
-  if (/login\.aspx|name=["']?password|action=["']?ai_login/i.test(body) && !/<rows\b/i.test(body)) {
+  const loginUrl = `${OPERATIVE_LOGIN_ROOT}/Login.aspx?LoginType=&ReturnUrl=&check=IE&identifier=${encodeURIComponent(identifier)}`;
+  let cookieJar = new Map();
+  let page;
+  try {
+    page = await fetch(loginUrl, { method: 'GET', headers: { 'Accept': 'text/html,*/*', 'User-Agent': 'WTFD-SCBA-Lifecycle/16.6' }, redirect: 'manual' });
+  } catch (error) {
+    return { success: false, authState: 'LOGIN_FETCH_ERROR', error: `Unable to reach OperativeIQ login: ${errorMessage(error)}` };
+  }
+  absorbCookies(cookieJar, page);
+  let html = await page.text();
+
+  // Follow a single login-service redirect if the identifier entry point redirects.
+  if (page.status >= 300 && page.status < 400 && page.headers.get('location')) {
+    const nextUrl = new URL(page.headers.get('location'), loginUrl).toString();
+    page = await fetch(nextUrl, { method: 'GET', headers: { 'Accept': 'text/html,*/*', 'Cookie': cookieMapHeader(cookieJar), 'User-Agent': 'WTFD-SCBA-Lifecycle/16.6' }, redirect: 'manual' });
+    absorbCookies(cookieJar, page);
+    html = await page.text();
+  }
+
+  const form = parseLoginForm(html, page.url || loginUrl);
+  if (!form) {
+    return { success: false, authState: 'LOGIN_FORM_NOT_FOUND', error: 'OperativeIQ login page loaded, but the traditional login form could not be identified.' };
+  }
+
+  const params = new URLSearchParams();
+  for (const [name, value] of Object.entries(form.hidden)) params.set(name, value);
+  params.set(form.identifierField, identifier);
+  params.set(form.loginField, loginId);
+  params.set(form.passwordField, password);
+  if (form.submitField) params.set(form.submitField.name, form.submitField.value || 'Login');
+
+  let response;
+  try {
+    response = await fetch(form.action, {
+      method: 'POST',
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,*/*',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': cookieMapHeader(cookieJar),
+        'Origin': OPERATIVE_LOGIN_ROOT,
+        'Referer': page.url || loginUrl,
+        'User-Agent': 'WTFD-SCBA-Lifecycle/16.6'
+      },
+      body: params.toString(),
+      redirect: 'manual'
+    });
+  } catch (error) {
+    return { success: false, authState: 'LOGIN_POST_ERROR', error: `OperativeIQ login request failed: ${errorMessage(error)}` };
+  }
+  absorbCookies(cookieJar, response);
+
+  // Follow login redirects while carrying the complete cookie jar. Stop once the tenant site is reached.
+  for (let i = 0; i < 6 && response.status >= 300 && response.status < 400 && response.headers.get('location'); i++) {
+    const nextUrl = new URL(response.headers.get('location'), response.url || form.action).toString();
+    response = await fetch(nextUrl, {
+      method: 'GET',
+      headers: { 'Accept': 'text/html,*/*', 'Cookie': cookieMapHeader(cookieJar), 'User-Agent': 'WTFD-SCBA-Lifecycle/16.6' },
+      redirect: 'manual'
+    });
+    absorbCookies(cookieJar, response);
+  }
+
+  const cookieHeader = cookieMapHeader(cookieJar);
+  if (!cookieJar.has('.ASPXAUTH')) {
+    let body = '';
+    try { body = await response.clone().text(); } catch {}
+    const detail = /invalid|incorrect|failed|password|login/i.test(body) ? ' OperativeIQ did not accept the supplied web login.' : '';
+    return { success: false, authState: 'LOGIN_REJECTED', error: `Automatic OperativeIQ login did not issue an .ASPXAUTH session cookie.${detail}` };
+  }
+
+  cachedOperativeWebCookies = cookieHeader;
+  cachedOperativeWebSessionAt = Date.now();
+  return { success: true, authState: 'AUTHENTICATED', cookieHeader };
+}
+
+function parseLoginForm(html, baseUrl) {
+  const forms = [...String(html || '').matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)];
+  for (const formMatch of forms) {
+    const attrs = htmlAttributes(formMatch[1]);
+    const body = formMatch[2];
+    const inputs = [...body.matchAll(/<input\b([^>]*)>/gi)].map(m => htmlAttributes(m[1]));
+    const identifier = pickInput(inputs, /client.?identifier|identifier/i, /client.?identifier|identifier/i);
+    const login = pickInput(inputs, /login.?id|username|user.?name/i, /login.?id|username|user.?name/i);
+    const password = inputs.find(i => String(i.type || '').toLowerCase() === 'password') || pickInput(inputs, /password/i, /password/i);
+    if (!identifier || !login || !password || !identifier.name || !login.name || !password.name) continue;
+    const hidden = {};
+    for (const input of inputs) if (String(input.type || '').toLowerCase() === 'hidden' && input.name) hidden[input.name] = input.value || '';
+    const submit = inputs.find(i => /submit|button/i.test(String(i.type || '')) && i.name);
     return {
-      success: false,
-      path,
-      rows: [],
-      authState: 'SESSION_EXPIRED',
-      error: 'OperativeIQ returned the login page even with .ASPXAUTH and ASP.NET_SessionId. Refresh both OPERATIVE_WEB_ASPXAUTH and OPERATIVE_WEB_SESSIONID. If the login page continues, AppInstanceId will be the next session cookie to test.'
+      action: new URL(attrs.action || baseUrl, baseUrl).toString(),
+      hidden,
+      identifierField: identifier.name,
+      loginField: login.name,
+      passwordField: password.name,
+      submitField: submit ? { name: submit.name, value: submit.value || '' } : null
     };
   }
+  return null;
+}
 
-  const rows = parseSupplyRoomXml(body).filter(row => String(row.RoomId || row.roomId || '') === HYDRO_STAGING_ROOM_ID);
-  if (!/<rows\b/i.test(body)) {
-    return {
-      success: false,
-      path,
-      rows: [],
-      authState: 'UNEXPECTED_RESPONSE',
-      error: 'OperativeIQ did not return the expected <rows> supply-room XML.'
-    };
+function pickInput(inputs, namePattern, hintPattern) {
+  return inputs.find(i => i.name && namePattern.test(i.name)) || inputs.find(i => hintPattern.test(`${i.placeholder || ''} ${i.id || ''} ${i.title || ''}`));
+}
+
+function htmlAttributes(source) {
+  const out = {};
+  const re = /([A-Za-z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
+  let m;
+  while ((m = re.exec(String(source || '')))) out[m[1].toLowerCase()] = decodeHtmlEntities(m[2] ?? m[3] ?? m[4] ?? '');
+  return out;
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || '').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+}
+
+function absorbCookies(jar, response) {
+  for (const raw of getSetCookieHeaders(response)) {
+    const first = String(raw || '').split(';', 1)[0];
+    const eq = first.indexOf('=');
+    if (eq <= 0) continue;
+    const name = first.slice(0, eq).trim();
+    const value = first.slice(eq + 1).trim();
+    if (/expires=/i.test(raw) && value === '') jar.delete(name); else jar.set(name, value);
   }
+}
 
-  return {
-    success: true,
-    path,
-    rows,
-    authState: 'AUTHENTICATED',
-    roomId: HYDRO_STAGING_ROOM_ID,
-    roomName: HYDRO_STAGING_ROOM_NAME,
-    rowCount: rows.length,
-    refreshedSessionCookiePresent: Boolean(response.headers.get('set-cookie'))
-  };
+function getSetCookieHeaders(response) {
+  try {
+    if (response?.headers?.getSetCookie) return response.headers.getSetCookie();
+  } catch {}
+  const combined = response?.headers?.get?.('set-cookie') || '';
+  if (!combined) return [];
+  // Split on cookie boundaries, not commas inside Expires=...
+  return combined.split(/,(?=\s*[^;,=\s]+=[^;,]*)/g);
+}
+
+function cookieMapHeader(jar) {
+  return [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+}
+
+function mergeResponseCookiesIntoCache(response) {
+  if (!cachedOperativeWebCookies) return;
+  const jar = new Map();
+  for (const part of cachedOperativeWebCookies.split(/;\s*/)) {
+    const eq = part.indexOf('=');
+    if (eq > 0) jar.set(part.slice(0, eq), part.slice(eq + 1));
+  }
+  absorbCookies(jar, response);
+  cachedOperativeWebCookies = cookieMapHeader(jar);
 }
 
 function normalizeAspxAuthCookie(value) {
@@ -940,7 +1116,6 @@ function normalizeAspxAuthCookie(value) {
   if (/^\.ASPXAUTH=/i.test(raw)) return raw.split(';')[0];
   return `.ASPXAUTH=${raw}`;
 }
-
 
 function normalizeAspNetSessionCookie(value) {
   const raw = String(value || '').trim();
@@ -1170,7 +1345,7 @@ async function supplyRoomDebug(env, url) {
 
   return {
     success: true,
-    mode: 'READ_ONLY_SUPPLY_ROOM_DEBUG_V16_4',
+    mode: 'READ_ONLY_SUPPLY_ROOM_DEBUG_V16_6',
     supplyRoomLookupPath: supplyRooms.path,
     supplyRoomInventoryPath: source.path,
     supplyRoomCount: supplyRooms.rows.length,

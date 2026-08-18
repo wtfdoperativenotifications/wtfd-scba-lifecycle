@@ -14,3 +14,9 @@ SCBA_ASSET_CLASS_ID = "41"
 #   OPERATIVE_CLIENT_SECRET
 #   OPERATIVE_WEB_ASPXAUTH   # value only; do not include in source control
 #   SYNC_ADMIN_TOKEN
+
+# v16.6 automatic OperativeIQ web login secrets (configure in Cloudflare, never commit values):
+# OPERATIVE_WEB_LOGIN_ID
+# OPERATIVE_WEB_PASSWORD
+# Optional text variable: OPERATIVE_WEB_IDENTIFIER = "wtfd" (defaults to wtfd)
+# Legacy cookie secrets OPERATIVE_WEB_ASPXAUTH / OPERATIVE_WEB_SESSIONID may remain as fallback.
