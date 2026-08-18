@@ -1,5 +1,8 @@
 const AUTH_URL = 'https://auth.operativeiqfrontline.com/FrontlineV_live/token';
 const RESOURCE_ROOT = 'https://client.operativeiqfrontline.com/FrontlineV_live';
+const OPERATIVE_WEB_ROOT = 'https://wtfd.operativeiq.com';
+const HYDRO_STAGING_ROOM_ID = '39';
+const HYDRO_STAGING_XML_PATH = `/rooms/SupplyRoomPartListXml.ashx?id=${HYDRO_STAGING_ROOM_ID}`;
 const PAGE_SIZE = 200;
 const MAX_RECORDS = 20000;
 
@@ -150,8 +153,9 @@ export default {
         success: true,
         application: 'WTFD SCBA Cylinder Lifecycle',
         phase: 13,
-        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16_2',
+        mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16_3',
         operativeCredentialsConfigured: Boolean(env.OPERATIVE_CLIENT_ID && env.OPERATIVE_CLIENT_SECRET),
+        operativeWebSessionConfigured: Boolean(env.OPERATIVE_WEB_ASPXAUTH),
         adminTokenConfigured: Boolean(env.SYNC_ADMIN_TOKEN),
         inventoryPathConfigured: Boolean(env.SCBA_INVENTORY_PATH),
         testingPathConfigured: Boolean(env.SCBA_TESTING_PATH),
@@ -540,7 +544,7 @@ async function scbaEnginePreview(env, url) {
 async function cachedDashboardResponse(request, env, url) {
   const cache = caches.default;
   const forceRefresh = url.searchParams.has('refresh');
-  const cacheKey = new Request(`${url.origin}/api/dashboard/scba-v16-2-ac41-f37-t32`, { method: 'GET' });
+  const cacheKey = new Request(`${url.origin}/api/dashboard/scba-v16-3-ac41-f37-t32`, { method: 'GET' });
 
   // A user-requested refresh must bypass Cloudflare's edge cache so inventory
   // transfers in OperativeIQ are reflected immediately.
@@ -601,8 +605,13 @@ async function buildDashboardPayload(env, url) {
   const inventoryRows = scbaItems.map(item =>
     normalizeLiveItem(item, context.assetClassName, manufacturerById, statusById, locationById)
   );
-  const supplyRoomInventory = await loadSupplyRoomInventory(token, supplyRooms.rows, inventoryRows);
-  const supplyRoomAssignmentByItem = buildSupplyRoomAssignmentMap(supplyRoomInventory.rows, supplyRooms.rows, inventoryRows, supplyRoomInventory.forcedRoomName || '');
+  const supplyRoomInventory = await loadDueForHydroWebInventory(env);
+  const supplyRoomAssignmentByItem = buildSupplyRoomAssignmentMap(
+    supplyRoomInventory.rows,
+    supplyRooms.rows,
+    inventoryRows,
+    HYDRO_STAGING_ROOM_NAME
+  );
 
   const scbaItemIds = new Set(scbaItems.map(item => String(item.id)));
   const itemById = new Map(scbaItems.map(item => [String(item.id), item]));
@@ -678,7 +687,7 @@ async function buildDashboardPayload(env, url) {
 
   return {
     success: true,
-    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16_2',
+    mode: 'LIVE_SCBA_LIFECYCLE_DASHBOARD_V16_3',
     generatedAt: new Date().toISOString(),
     refreshMinutes: 15,
     module: 'SCBA_CYLINDER',
@@ -722,7 +731,9 @@ async function buildDashboardPayload(env, url) {
       duplicateCylinderIds: assets.length - new Set(assets.map(row => String(row.itemId))).size,
       passed: Number(context.assetClassId) === 41 && assets.length === new Set(assets.map(row => String(row.itemId))).size,
       supplyRoomInventoryPath: supplyRoomInventory.path,
-      supplyRoomInventoryDetected: Boolean(supplyRoomInventory.path),
+      supplyRoomInventoryDetected: supplyRoomInventory.success === true,
+      supplyRoomInventoryAuth: supplyRoomInventory.authState || '',
+      supplyRoomInventoryError: supplyRoomInventory.error || '',
       hydroStagingRoom: HYDRO_STAGING_ROOM_NAME,
       normalScbaRoom: NORMAL_SCBA_ROOM_NAME,
       hydroStagingMatches: activeAssets.filter(row => row.readyForHydro).length
@@ -731,9 +742,9 @@ async function buildDashboardPayload(env, url) {
       'Detailed hydrostatic form answers are not yet resolved from formAnswerUniqueId.',
       'Planned decommission dates use the OperativeIQ SCBA Cylinders Decommission Planning report (203 unique cylinders); the item record is used as a secondary source, and only unmatched cylinders fall back to a clearly labeled 15-year estimate.',
       'Replacement costs use the current item price stored in OperativeIQ when available and are planning estimates only.',
-      supplyRoomInventory.path
-        ? `Ready for Hydro is driven by current OperativeIQ supply-room inventory from ${supplyRoomInventory.path}; cylinders in ${HYDRO_STAGING_ROOM_NAME} are staged for testing.`
-        : 'OperativeIQ supply-room inventory could not be resolved automatically; Ready for Hydro falls back to any location available on the item record.'
+      supplyRoomInventory.success
+        ? `Ready for Hydro is driven by OperativeIQ room ${HYDRO_STAGING_ROOM_ID} (${HYDRO_STAGING_ROOM_NAME}) using ${HYDRO_STAGING_XML_PATH}.`
+        : `Ready for Hydro could not read OperativeIQ room ${HYDRO_STAGING_ROOM_ID}: ${supplyRoomInventory.error || 'web-session authentication unavailable'}.`
     ],
     assets
   };
@@ -836,6 +847,116 @@ async function loadSupplyRooms(token) {
     } catch {}
   }
   return fallback || { path: null, rows: [] };
+}
+
+
+async function loadDueForHydroWebInventory(env) {
+  const path = HYDRO_STAGING_XML_PATH;
+  const url = `${OPERATIVE_WEB_ROOT}${path}`;
+  const configuredCookie = normalizeAspxAuthCookie(env.OPERATIVE_WEB_ASPXAUTH || '');
+
+  if (!configuredCookie) {
+    return {
+      success: false,
+      path,
+      rows: [],
+      authState: 'NOT_CONFIGURED',
+      error: 'OPERATIVE_WEB_ASPXAUTH is not configured as a Cloudflare Worker secret.'
+    };
+  }
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Accept': 'text/xml,application/xml,text/plain,*/*',
+        'Cookie': configuredCookie,
+        'User-Agent': 'WTFD-SCBA-Lifecycle/16.3'
+      },
+      redirect: 'manual'
+    });
+  } catch (error) {
+    return { success: false, path, rows: [], authState: 'FETCH_ERROR', error: errorMessage(error) };
+  }
+
+  const location = response.headers.get('location') || '';
+  if (response.status >= 300 && response.status < 400) {
+    return {
+      success: false,
+      path,
+      rows: [],
+      authState: 'SESSION_EXPIRED',
+      error: `OperativeIQ redirected the room feed to ${location || 'a login page'}; refresh the OPERATIVE_WEB_ASPXAUTH Worker secret.`
+    };
+  }
+
+  const body = await response.text();
+  if (!response.ok) {
+    return { success: false, path, rows: [], authState: `HTTP_${response.status}`, error: `OperativeIQ room feed returned HTTP ${response.status}.` };
+  }
+
+  if (/login\.aspx|name=["']?password|action=["']?ai_login/i.test(body) && !/<rows\b/i.test(body)) {
+    return {
+      success: false,
+      path,
+      rows: [],
+      authState: 'SESSION_EXPIRED',
+      error: 'OperativeIQ returned the login page instead of supply-room XML; refresh the OPERATIVE_WEB_ASPXAUTH Worker secret.'
+    };
+  }
+
+  const rows = parseSupplyRoomXml(body).filter(row => String(row.RoomId || row.roomId || '') === HYDRO_STAGING_ROOM_ID);
+  if (!/<rows\b/i.test(body)) {
+    return {
+      success: false,
+      path,
+      rows: [],
+      authState: 'UNEXPECTED_RESPONSE',
+      error: 'OperativeIQ did not return the expected <rows> supply-room XML.'
+    };
+  }
+
+  return {
+    success: true,
+    path,
+    rows,
+    authState: 'AUTHENTICATED',
+    roomId: HYDRO_STAGING_ROOM_ID,
+    roomName: HYDRO_STAGING_ROOM_NAME,
+    rowCount: rows.length,
+    refreshedSessionCookiePresent: Boolean(response.headers.get('set-cookie'))
+  };
+}
+
+function normalizeAspxAuthCookie(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^\.ASPXAUTH=/i.test(raw)) return raw.split(';')[0];
+  return `.ASPXAUTH=${raw}`;
+}
+
+function parseSupplyRoomXml(xml) {
+  const rows = [];
+  const rowRegex = /<row\b([^>]*)\/?\s*>/gi;
+  let match;
+  while ((match = rowRegex.exec(String(xml || '')))) {
+    const attrs = {};
+    const attrRegex = /([A-Za-z_][\w:.-]*)\s*=\s*"([^"]*)"/g;
+    let attr;
+    while ((attr = attrRegex.exec(match[1]))) attrs[attr[1]] = decodeXmlEntities(attr[2]);
+    rows.push(attrs);
+  }
+  return rows;
+}
+
+function decodeXmlEntities(value) {
+  return String(value || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
 }
 
 async function loadSupplyRoomInventory(token, supplyRooms, inventoryRows) {
@@ -951,7 +1072,7 @@ function buildSupplyRoomAssignmentMap(rows, supplyRooms, inventoryRows, forcedRo
 
 function normalizeSupplyRoomInventoryRow(source, roomNameById = new Map(), forcedRoomName = '') {
   const roomObject = first(source, ['supplyRoom', 'room', 'location', 'warehouse', 'supplyRoomLocation']);
-  const directRoomId = first(source, ['supplyRoomId', 'supplyRoomID', 'supplyRoomFK', 'roomId', 'roomID', 'roomFK', 'locationId', 'locationFK', 'warehouseId', 'warehouseFK']);
+  const directRoomId = first(source, ['supplyRoomId', 'supplyRoomID', 'SupplyRoomId', 'supplyRoomFK', 'roomId', 'roomID', 'RoomId', 'roomFK', 'locationId', 'locationFK', 'warehouseId', 'warehouseFK']);
   const nestedRoomId = roomObject && typeof roomObject === 'object'
     ? first(roomObject, ['id', 'supplyRoomId', 'roomId', 'locationId', 'warehouseId'])
     : null;
@@ -964,16 +1085,16 @@ function normalizeSupplyRoomInventoryRow(source, roomNameById = new Map(), force
 
   const partObject = first(source, ['part', 'item', 'asset', 'fixedAsset', 'inventoryItem']);
   const identifiers = unique([
-    text(source, ['serialNumber', 'serialNo', 'partSerialNumber', 'partNumber', 'itemNumber', 'partUpc', 'partUPC', 'upc', 'assetNumber', 'assetTag', 'partDescription', 'itemName', 'description']),
+    text(source, ['serialNumber', 'serialNo', 'partSerialNumber', 'partNumber', 'PartNumber', 'itemNumber', 'partUpc', 'partUPC', 'PartUPC', 'upc', 'assetNumber', 'assetTag', 'partDescription', 'PartName', 'itemName', 'description']),
     partObject && typeof partObject === 'object' ? text(partObject, ['serialNumber', 'serialNo', 'partSerialNumber', 'partNumber', 'itemNumber', 'partUpc', 'partUPC', 'upc', 'assetNumber', 'assetTag', 'itemName', 'partDescription', 'description']) : ''
   ].filter(Boolean));
 
   const itemIds = unique([
-    first(source, ['itemId', 'itemID', 'fixedAssetId', 'assetId', 'inventoryItemId', 'partId', 'partID']),
+    first(source, ['itemId', 'itemID', 'ItemId', 'fixedAssetId', 'assetId', 'inventoryItemId', 'partId', 'partID']),
     partObject && typeof partObject === 'object' ? first(partObject, ['id', 'itemId', 'fixedAssetId', 'assetId', 'partId']) : null
   ].filter(value => value !== null && value !== undefined && value !== ''));
 
-  const onHandRaw = first(source, ['onHand', 'onHandQuantity', 'quantityOnHand', 'qtyOnHand', 'currentQuantity', 'quantity', 'stockQuantity', 'inventoryLevel']);
+  const onHandRaw = first(source, ['onHand', 'OnHand', 'onHandQuantity', 'quantityOnHand', 'qtyOnHand', 'currentQuantity', 'quantity', 'stockQuantity', 'inventoryLevel']);
   const onHand = onHandRaw === null || onHandRaw === undefined || onHandRaw === '' ? null : Number(onHandRaw);
 
   return { roomId, roomName, identifiers, itemIds, onHand, raw: source };
@@ -1028,15 +1149,15 @@ async function supplyRoomDebug(env, url) {
   const statusById = lookupNameMap(statuses.rows, ['name', 'statusName', 'description']);
   const inventoryRows = scbaItems.map(item => normalizeLiveItem(item, context.assetClassName, manufacturerById, statusById));
   const supplyRooms = await loadSupplyRooms(token);
-  const source = await loadSupplyRoomInventory(token, supplyRooms.rows, inventoryRows);
-  const assignments = buildSupplyRoomAssignmentMap(source.rows, supplyRooms.rows, inventoryRows, source.forcedRoomName || '');
+  const source = await loadDueForHydroWebInventory(env);
+  const assignments = buildSupplyRoomAssignmentMap(source.rows, supplyRooms.rows, inventoryRows, HYDRO_STAGING_ROOM_NAME);
   const serial = String(url.searchParams.get('serial') || 'OK655448').trim();
   const target = inventoryRows.find(item => [item.serialNumber, item.itemNumber, item.partUpc, item.assetTag].some(value => exactInventoryKey(value) === exactInventoryKey(serial))) || null;
   const assignment = target ? assignments.get(String(target.itemId)) || null : null;
 
   return {
     success: true,
-    mode: 'READ_ONLY_SUPPLY_ROOM_DEBUG_V16_2',
+    mode: 'READ_ONLY_SUPPLY_ROOM_DEBUG_V16_3',
     supplyRoomLookupPath: supplyRooms.path,
     supplyRoomInventoryPath: source.path,
     supplyRoomCount: supplyRooms.rows.length,

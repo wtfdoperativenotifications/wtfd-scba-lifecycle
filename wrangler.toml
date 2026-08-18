@@ -12,4 +12,5 @@ SCBA_ASSET_CLASS_ID = "41"
 # Configure these as encrypted Worker secrets in Cloudflare:
 #   OPERATIVE_CLIENT_ID
 #   OPERATIVE_CLIENT_SECRET
+#   OPERATIVE_WEB_ASPXAUTH   # value only; do not include in source control
 #   SYNC_ADMIN_TOKEN

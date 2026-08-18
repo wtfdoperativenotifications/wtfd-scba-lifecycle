@@ -1,5 +1,13 @@
-# WTFD SCBA Cylinder Lifecycle — 
-## Version 16.2
+# WTFD SCBA Cylinder Lifecycle
+
+## Version 16.3
+
+Version 16.3 replaces supply-room API discovery with the confirmed OperativeIQ web feed for **Due for Hydro**: `/rooms/SupplyRoomPartListXml.ashx?id=39`. The XML rows are matched to SCBA cylinders by `ItemId`, `PartNumber`, `PartUPC`, and part name. Any row with `OnHand > 0` in room 39 is automatically marked **READY FOR HYDRO**.
+
+The room feed is protected by OperativeIQ Forms Authentication, so the Worker requires the encrypted Cloudflare secret `OPERATIVE_WEB_ASPXAUTH`. Store only the cookie value in Cloudflare; never commit it to the repository. The dashboard reports a clear warning if the secret is missing or the session has expired.
+
+Validation case from OperativeIQ: `ItemId=1393`, `PartNumber=OK655448`, `PartUPC=SCBA Bottle 390`, `PartName=SCBA Cylinder 390`, `RoomId=39`, `OnHand=1`.
+
 
 Version 16.2 drives the hydro workflow from **OperativeIQ Supply Room inventory**, not the cylinder asset-location field. A cylinder with positive on-hand inventory in **Due for Hydro** is automatically labeled **READY FOR HYDRO**; transferring it back to **SCBA Warehouse** clears that workflow status. Hydro compliance remains independent. The Worker automatically discovers compatible supply-room inventory resources from OperativeIQ Swagger metadata and includes a read-only diagnostic route for validation.
 
